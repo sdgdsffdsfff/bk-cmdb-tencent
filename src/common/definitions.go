@@ -184,6 +184,9 @@ const (
 	// BKDBPush the db opeartor
 	BKDBPush = "$push"
 
+	// BKDBUNSET the db opeartor
+	BKDBUNSET = "$unset"
+
 	// BKDBSortFieldSep the db sort field split char
 	BKDBSortFieldSep = ","
 )
@@ -329,6 +332,9 @@ const (
 
 	// BKInstNameField the inst name field
 	BKInstNameField = "bk_inst_name"
+
+	// ExportCustomFields the use custom display columns
+	ExportCustomFields = "export_custom_fields"
 
 	// BKProcIDField the proc id field
 	BKProcIDField = "bk_process_id"
@@ -562,6 +568,7 @@ const (
 
 	// BKGseOpProcTaskDetailField gse operate process return detail
 	BKGseOpProcTaskDetailField = "detail"
+	BKGroupField               = "group"
 )
 
 const (
@@ -820,11 +827,11 @@ const (
 	BKHTTPSupplierID        = "bk_supplier_id"
 
 	// BKHTTPCCRequestID cc request id cc_request_id
-	BKHTTPCCRequestID = "CC_REQUEST_ID"
+	BKHTTPCCRequestID = "Cc_Request_Id"
 	// BKHTTPOtherRequestID esb request id  X-Bkapi-Request-Id
 	BKHTTPOtherRequestID  = "X-Bkapi-Request-Id"
-	BKHTTPCCRequestTime   = "CC_REQUEST_TIME"
-	BKHTTPCCTransactionID = "CC_TXN_ID"
+	BKHTTPCCRequestTime   = "Cc_Request_Time"
+	BKHTTPCCTransactionID = "Cc_Txn_Id"
 )
 
 type CCContextKey string
@@ -842,6 +849,7 @@ const (
 const (
 	HostOSTypeEnumLinux   = "1"
 	HostOSTypeEnumWindows = "2"
+	HostOSTypeEnumAIX     = "3"
 )
 
 const (
@@ -946,7 +954,8 @@ const (
 )
 
 const (
-	BKProcInstanceOpUser = "proc instance user"
+	BKProcInstanceOpUser             = "proc instance user"
+	BKSynchronizeDataTaskDefaultUser = "synchronize task user"
 )
 
 const (
@@ -996,4 +1005,30 @@ const (
 
 const (
 	BKBizDefault = "bizdefault"
+)
+
+const (
+	MetaDataSynchronizeFlagField    = "metadata_sync_flag"
+	MetaDataSynchronizeVersionField = "metadata_sync_version"
+
+	// SynchronizeSignPrefix  synchronize sign , Should appear in the configuration file
+	SynchronizeSignPrefix = "sync_blueking"
+
+	/* synchronize model description classify*/
+
+	// SynchronizeModelTypeClassification synchroneize model classification
+	SynchronizeModelTypeClassification = "model_classification"
+	// SynchronizeModelTypeAttribute synchroneize model attribute
+	SynchronizeModelTypeAttribute = "model_attribute"
+	// SynchronizeModelTypeAttributeGroup synchroneize model attribute group
+	SynchronizeModelTypeAttributeGroup = "model_atrribute_group"
+	// SynchronizeModelTypeBase synchroneize model attribute group
+	SynchronizeModelTypeBase = "model"
+	// SynchronizeModelTypeModelClassificationRelation synchroneize model classification relation
+	SynchronizeModelTypeModelClassificationRelation = "model_classification_relation"
+
+	/* synchronize instance assoication sign*/
+
+	// SynchronizeAssociationTypeModelHost synchroneize model ggroup
+	SynchronizeAssociationTypeModelHost = "module_host"
 )

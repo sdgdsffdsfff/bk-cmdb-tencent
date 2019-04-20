@@ -166,6 +166,9 @@ func (m *publicAuth) ValidResAccess(pathArr []string, c *gin.Context) bool {
 	}
 
 	// biz  search privilege, return true
+	if strings.Contains(pathStr, types.BK_FIND) {
+		return true
+	}
 	if strings.Contains(pathStr, types.BK_APP_SEARCH) || strings.Contains(pathStr, types.BK_SET_SEARCH) || strings.Contains(pathStr, types.BK_MODULE_SEARCH) || strings.Contains(pathStr, types.BK_INST_SEARCH) || strings.Contains(pathStr, types.BK_HOSTS_SEARCH) {
 		return true
 	}
@@ -187,19 +190,20 @@ func (m *publicAuth) ValidResAccess(pathArr []string, c *gin.Context) bool {
 	if strings.Contains(pathStr, types.BK_INST_ASSOCIATION_OWNER_SEARCH) {
 		return true
 	}
-	//valid resource config
-	if types.ResPatternRegexp.MatchString(pathStr) {
+
+	// valid resource config
+	if strings.HasSuffix(pathStr, types.ResPattern) || pathStr == types.ImportHosts {
 		blog.Debug("valid resource config: %v", pathStr)
 		sysPrivi := session.Get("sysPrivi")
 		return validSysConfigPrivi(sysPrivi, types.BK_CC_RESOURCE)
 
 	}
 
-	//valid inst  privilege  op
-	if strings.Contains(pathStr, types.BK_INSTS) && !strings.Contains(pathStr, types.BK_TOPO) {
+	// valid inst  privilege  op
+	if strings.Contains(pathStr, types.BK_INSTS) && !strings.Contains(pathStr, types.BK_TOPO) && !strings.Contains(pathStr, "association") {
 		est := c.GetHeader(common.BKAppIDField)
 		if "" == est {
-			//common inst op valid
+			// common inst op valid
 			modelPrivi := session.Get("modelPrivi").(string)
 			if 0 == len(modelPrivi) {
 				blog.Error("get model privilege json error")
@@ -207,7 +211,7 @@ func (m *publicAuth) ValidResAccess(pathArr []string, c *gin.Context) bool {
 			}
 			return validModelConfigPrivi(modelPrivi, method, pathArr)
 		} else {
-			//mainline inst op valid
+			// mainline inst op valid
 			var objName string
 			var mainLineObjIDArr []string
 			if method == common.HTTPCreate {

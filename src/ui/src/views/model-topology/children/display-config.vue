@@ -186,11 +186,10 @@
 
 <style lang="scss" scoped>
     .display-wrapper {
-        padding: 20px 30px;
+        padding: 20px 0;
         height: 100%;
         .display-box {
-            max-height: calc(100% - 56px);
-            @include scrollbar;
+            padding: 0 30px;
         }
     }
     .display-setting {
@@ -308,7 +307,7 @@
         }
     }
     .button-group {
-        margin: 20px 0 0;
+        margin: 20px;
         font-size: 0;
         .bk-button {
             margin-right: 10px;

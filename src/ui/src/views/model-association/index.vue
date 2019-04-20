@@ -4,7 +4,7 @@
             <bk-button type="primary"
                 :disabled="!authority.includes('update')"
                 @click="createRelation">
-                {{$t('ModelManagement["新增关联类型"]')}}
+                {{$t('Common["新建"]')}}
             </bk-button>
             <label class="search-input">
                 <i class="bk-icon icon-search" @click="searchRelation"></i>
@@ -43,7 +43,7 @@
         </cmdb-table>
         <cmdb-slider
             class="relation-slider"
-            :width="410"
+            :width="450"
             :title="slider.title"
             :isShow.sync="slider.isShow">
             <the-relation
@@ -70,7 +70,7 @@
                 slider: {
                     isShow: false,
                     isEdit: false,
-                    title: this.$t('ModelManagement["新增关联类型"]'),
+                    title: this.$t('ModelManagement["新建关联类型"]'),
                     relation: {}
                 },
                 searchText: '',
@@ -183,7 +183,7 @@
                 this.table.list.splice()
             },
             createRelation () {
-                this.slider.title = this.$t('ModelManagement["新增关联类型"]')
+                this.slider.title = this.$t('ModelManagement["新建关联类型"]')
                 this.slider.isEdit = false
                 this.slider.isShow = true
             },
@@ -212,11 +212,11 @@
                 this.searchRelation()
             },
             handlePageChange (current) {
-                this.pagination.current = current
+                this.table.pagination.current = current
                 this.searchRelation()
             },
             handleSizeChange (size) {
-                this.pagination.size = size
+                this.table.pagination.size = size
                 this.handlePageChange(1)
             },
             handleSortChange (sort) {

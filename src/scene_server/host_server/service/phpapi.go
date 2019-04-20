@@ -18,14 +18,15 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/emicklei/go-restful"
-
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
+	"configcenter/src/common/errors"
 	"configcenter/src/common/mapstr"
 	meta "configcenter/src/common/metadata"
 	"configcenter/src/common/util"
 	"configcenter/src/scene_server/validator"
+
+	"github.com/emicklei/go-restful"
 )
 
 // updateHostPlat 根据条件更新主机信息
@@ -541,8 +542,8 @@ func (s *Service) GetHostAppByCompanyId(req *restful.Request, resp *restful.Resp
 	}
 	configArr, err := srvData.lgc.GetConfigByCond(srvData.ctx, configCon)
 	if nil != err {
-		blog.Errorf("GetHostAppByCompanyId getConfigByCond err:%s, input:%+v,rid", err.Error(), input, srvData.rid)
-		resp.WriteError(http.StatusInternalServerError, &meta.RespError{Msg: err})
+		blog.Errorf("GetHostAppByCompanyId getConfigByCond err:%s, input:%+v,rid:%s", err.Error(), input, srvData.rid)
+		resp.WriteError(http.StatusInternalServerError, &meta.RespError{Msg: srvData.ccErr.Errorf(common.CCErrHostGetFail)})
 		return
 	}
 	blog.V(5).Infof("GetHostAppByCompanyId configArr:%v, input:%+v,rid:%s", configArr, input, srvData.rid)
@@ -768,13 +769,13 @@ func (s *Service) GetPlat(req *restful.Request, resp *restful.Response) {
 	params := new(meta.QueryCondition)
 	res, err := s.CoreAPI.CoreService().Instance().ReadInstance(srvData.ctx, srvData.header, common.BKInnerObjIDPlat, params)
 	if nil != err {
-		blog.Errorf("GetPlat error: %v,rid:%s", err, srvData.rid)
+		blog.Errorf("GetPlat htt do error: %v,rid:%s", err, srvData.rid)
 		resp.WriteError(http.StatusInternalServerError, &meta.RespError{Msg: srvData.ccErr.Errorf(common.CCErrTopoGetCloudErrStrFaild, err.Error())})
 		return
 	}
 	if false == res.Result {
-		blog.Errorf("GetPlat error. err code:%d, err msg:%s,rid:%s", res.Code, res.ErrMsg, srvData.rid)
-		resp.WriteError(http.StatusInternalServerError, &meta.RespError{Msg: srvData.ccErr.Errorf(common.CCErrTopoGetCloudErrStrFaild, err.Error())})
+		blog.Errorf("GetPlat http reply error. err code:%d, err msg:%s,rid:%s", res.Code, res.ErrMsg, srvData.rid)
+		resp.WriteError(http.StatusInternalServerError, &meta.RespError{Msg: srvData.ccErr.New(res.Code, res.ErrMsg)})
 
 	} else {
 		resp.WriteEntity(meta.Response{
@@ -802,9 +803,10 @@ func (s *Service) CreatePlat(req *restful.Request, resp *restful.Response) {
 
 	if nil != validErr {
 		blog.Errorf("CreatePlat error: %v, input:%+v,rid:%s", validErr, input, srvData.rid)
-		if strings.Contains(srvData.ccErr.Error(common.CCErrCommDuplicateItem).Error(), validErr.Error()) {
-			resp.WriteError(http.StatusBadRequest, &meta.RespError{Msg: srvData.ccErr.Error(common.CCErrCommDuplicateItem)})
-			return
+		if se, ok := validErr.(errors.CCErrorCoder); ok {
+			if se.GetCode() == common.CCErrCommDuplicateItem {
+				resp.WriteError(http.StatusBadRequest, &meta.RespError{Msg: srvData.ccErr.Errorf(common.CCErrCommDuplicateItem, "")})
+			}
 		}
 		resp.WriteError(http.StatusInternalServerError, &meta.RespError{Msg: srvData.ccErr.Error(common.CCErrTopoInstCreateFailed)})
 		return
@@ -888,31 +890,6 @@ func (s *Service) DelPlat(req *restful.Request, resp *restful.Response) {
 			Data:     "",
 		})
 	}
-}
-
-func (s *Service) GetAgentStatus(req *restful.Request, resp *restful.Response) {
-	srvData := s.newSrvComm(req.Request.Header)
-
-	// 获取AppID
-	pathParams := req.PathParameters()
-	appID, err := util.GetInt64ByInterface(pathParams["appid"])
-	if nil != err {
-		blog.Errorf("GetAgentStatus error :%s,rid:%s", err, srvData.rid)
-		resp.WriteError(http.StatusBadRequest, &meta.RespError{Msg: srvData.ccErr.Errorf(common.CCErrCommParamsInvalid, err.Error())})
-		return
-	}
-
-	res, err := srvData.lgc.GetAgentStatus(srvData.ctx, appID, &s.Config.Gse)
-	if nil != err {
-		blog.Errorf("GetAgentStatus error. err:%v,input:%+v,rid:%s", err, appID, srvData.rid)
-		resp.WriteError(http.StatusInternalServerError, &meta.RespError{Msg: srvData.ccErr.Errorf(common.CCErrCommParamsInvalid, err.Error())})
-		return
-	}
-	resp.WriteEntity(meta.Response{
-		BaseResp: meta.SuccessBaseResp,
-		Data:     res,
-	})
-
 }
 
 func (s *Service) getHostListByAppidAndField(req *restful.Request, resp *restful.Response) {

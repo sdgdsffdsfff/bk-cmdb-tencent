@@ -75,7 +75,7 @@ func (cli *Service) CreateObjectUnique(req *restful.Request, resp *restful.Respo
 	err := recheckUniqueForExistsInsts(ctx, db, ownerID, objID, dat.Keys, dat.MustCheck)
 	if nil != err {
 		blog.Errorf("[CreateObjectUnique] recheckUniqueForExistsInsts for %s with %v error: %v", objID, dat, err)
-		resp.WriteError(http.StatusInternalServerError, &metadata.RespError{Msg: defErr.Error(common.CCErrCommDuplicateItem)})
+		resp.WriteError(http.StatusInternalServerError, &metadata.RespError{Msg: defErr.Errorf(common.CCErrCommDuplicateItem, "")})
 		return
 	}
 
@@ -161,7 +161,7 @@ func (cli *Service) UpdateObjectUnique(req *restful.Request, resp *restful.Respo
 	err = recheckUniqueForExistsInsts(ctx, db, ownerID, objID, unique.Keys, unique.MustCheck)
 	if nil != err {
 		blog.Errorf("[UpdateObjectUnique] recheckUniqueForExistsInsts for %s with %v error: %v", objID, unique, err)
-		resp.WriteError(http.StatusInternalServerError, &metadata.RespError{Msg: defErr.Error(common.CCErrCommDuplicateItem)})
+		resp.WriteError(http.StatusInternalServerError, &metadata.RespError{Msg: defErr.Errorf(common.CCErrCommDuplicateItem, "")})
 		return
 	}
 
@@ -179,7 +179,7 @@ func (cli *Service) UpdateObjectUnique(req *restful.Request, resp *restful.Respo
 	}
 
 	if oldunique.Ispre {
-		blog.Errorf("[UpdateObjectUnique] could not update preset constrain: %s", err, oldunique)
+		blog.Errorf("[UpdateObjectUnique] could not update preset constrain: %+v, %v", oldunique, err)
 		resp.WriteError(http.StatusInternalServerError, &metadata.RespError{Msg: defErr.Error(common.CCErrTopoObjectUniquePresetCouldNotDelOrEdit)})
 		return
 	}
@@ -224,7 +224,7 @@ func (cli *Service) DeleteObjectUnique(req *restful.Request, resp *restful.Respo
 	}
 
 	if unique.Ispre {
-		blog.Errorf("[DeleteObjectUnique] could not delete preset constrain: %s", err, unique)
+		blog.Errorf("[DeleteObjectUnique] could not delete preset constrain:%+v, %s", unique, err)
 		resp.WriteError(http.StatusInternalServerError, &metadata.RespError{Msg: defErr.Error(common.CCErrTopoObjectUniquePresetCouldNotDelOrEdit)})
 		return
 	}
@@ -255,7 +255,7 @@ func (cli *Service) SearchObjectUnique(req *restful.Request, resp *restful.Respo
 
 	uniques, err := cli.searchObjectUnique(ctx, db, ownerID, objID)
 	if nil != err {
-		blog.Errorf("[SearchObjectUnique] Search error: %s, raw: %#v", err)
+		blog.Errorf("[SearchObjectUnique] Search error: %v", err)
 		resp.WriteError(http.StatusInternalServerError, &metadata.RespError{Msg: defErr.Error(common.CCErrObjectDBOpErrno)})
 		return
 	}

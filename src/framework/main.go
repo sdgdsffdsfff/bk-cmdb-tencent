@@ -93,7 +93,9 @@ func main() {
 		client.NewForConfig(config.Get(), nil)
 	}
 
+	// initial the background framework manager.
 	api.Init()
+
 	defer func() {
 		blog.CloseLogs()
 		api.UnInit()
@@ -110,7 +112,7 @@ func main() {
 	server.RegisterActions(api.Actions()...)
 	server.RegisterActions(metricManager.Actions()...)
 
-	httpChan := make(chan error)
+	httpChan := make(chan error, 1)
 	go func() { httpChan <- server.ListenAndServe() }()
 
 	sigs := make(chan os.Signal, 1)

@@ -48,7 +48,7 @@ func (h *HostLog) WithPrevious(ctx context.Context, hostID string, headers []met
 	if headers != nil || len(headers) != 0 {
 		h.Content.Headers = headers
 	} else {
-		h.Content.Headers, err = h.logic.GetHostAttributes(ctx, h.ownerID)
+		h.Content.Headers, err = h.logic.GetHostAttributes(ctx, h.ownerID, nil)
 		if err != nil {
 			return err
 		}
@@ -221,7 +221,7 @@ func (h *HostModuleLog) SaveAudit(ctx context.Context, appID, user, desc string)
 
 		preModule := make([]interface{}, 0)
 		var preApp interface{}
-		for moduleID, _ := range preMap[instID] {
+		for moduleID := range preMap[instID] {
 			preModule = append(preModule, moduleMap[moduleID])
 			preApp = moduleMap[moduleID].appID
 			ownerID = moduleMap[moduleID].ownerID
@@ -230,7 +230,7 @@ func (h *HostModuleLog) SaveAudit(ctx context.Context, appID, user, desc string)
 		curModule := make([]interface{}, 0)
 		var curApp interface{}
 
-		for moduleID, _ := range curMap[instID] {
+		for moduleID := range curMap[instID] {
 			curModule = append(curModule, moduleMap[moduleID])
 			curApp = moduleMap[moduleID].appID
 			ownerID = moduleMap[moduleID].ownerID

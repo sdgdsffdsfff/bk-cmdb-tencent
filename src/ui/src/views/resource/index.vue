@@ -17,7 +17,7 @@
         </cmdb-hosts-filter>
         <cmdb-hosts-table class="resource-main" ref="resourceTable"
             :authority="resourceAuthority"
-            :columns-config-key="table.columnsConfigKey"
+            :columns-config-key="columnsConfigKey"
             :columns-config-properties="columnsConfigProperties"
             :columns-config-disabled-columns="['bk_host_innerip', 'bk_cloud_id', 'bk_biz_name', 'bk_module_name']"
             @on-checked="handleChecked"
@@ -56,6 +56,7 @@
                     </bk-button>
                     <form id="exportForm" :action="table.exportUrl" method="POST" hidden>
                         <input type="hidden" name="bk_host_id" :value="table.checked">
+                        <input type="hidden" name="export_custom_fields" :value="usercustom[columnsConfigKey]">
                         <input type="hidden" name="bk_biz_id" value="-1">
                     </form>
                     <cmdb-clipboard-selector class="options-clipboard"
@@ -147,7 +148,15 @@
             }
         },
         computed: {
-            ...mapGetters('objectBiz', ['business']),
+            ...mapGetters(['userName', 'isAdminView']),
+            ...mapGetters('userCustom', ['usercustom']),
+            ...mapGetters('objectBiz', ['business', 'bizId']),
+            columnsConfigKey () {
+                return `${this.userName}_$resource_${this.isAdminView ? 'adminView' : this.bizId}_table_columns`
+            },
+            customColumns () {
+                return this.usercustom[this.columnsConfigKey]
+            },
             clipboardList () {
                 return this.table.header.filter(header => header.type !== 'checkbox')
             },
@@ -203,14 +212,13 @@
             },
             getProperties () {
                 return this.batchSearchObjectAttribute({
-                    params: {
+                    params: this.$injectMetadata({
                         bk_obj_id: {'$in': Object.keys(this.properties)},
                         bk_supplier_account: this.supplierAccount
-                    },
+                    }, {inject: false}),
                     config: {
                         requestId: `post_batchSearchObjectAttribute_${Object.keys(this.properties).join('_')}`,
-                        requestGroup: Object.keys(this.properties).map(id => `post_searchObjectAttribute_${id}`),
-                        fromCache: true
+                        requestGroup: Object.keys(this.properties).map(id => `post_searchObjectAttribute_${id}`)
                     }
                 }).then(result => {
                     Object.keys(this.properties).forEach(objId => {
@@ -243,7 +251,15 @@
                 return params
             },
             routeToHistory () {
-                this.$router.push('/history/host?relative=/resource')
+                this.$router.push({
+                    name: 'modelHistory',
+                    params: {
+                        objId: 'host'
+                    },
+                    query: {
+                        relative: '/resource'
+                    }
+                })
             },
             handleAssignHosts (businessId, business) {
                 if (!businessId) return
