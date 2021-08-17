@@ -1,208 +1,261 @@
 <template>
-    <div>
-        <bk-button class="create-btn" type="primary"
-            :disabled="isReadOnly || !authority.includes('update')"
-            @click="createVerification">
-            {{$t('ModelManagement["新建校验"]')}}
+  <div class="verification-layout">
+    <div class="options">
+      <cmdb-auth class="inline-block-middle"
+        v-if="!isTopoModel"
+        :auth="{ type: $OPERATION.U_MODEL, relation: [modelId] }"
+        @update-auth="handleReceiveAuth">
+        <bk-button slot-scope="{ disabled }"
+          class="create-btn"
+          theme="primary"
+          :disabled="isReadOnly || disabled"
+          @click="createVerification">
+          {{$t('新建校验')}}
         </bk-button>
-        <cmdb-table
-            class="relation-table"
-            :loading="$loading(['searchObjectUniqueConstraints', 'deleteObjectUniqueConstraints'])"
-            :sortable="false"
-            :header="table.header"
-            :list="table.list"
-            :pagination.sync="table.pagination"
-            :wrapperMinusHeight="220">
-            <template v-for="(header, index) in table.header" :slot="header.id" slot-scope="{ item }">
-                <div :key="index" :class="{'disabled': isReadOnly}">
-                    <template v-if="header.id==='keys'">
-                        {{getRuleName(item.keys)}}
-                    </template>
-                    <template v-else-if="header.id==='must_check'">
-                        {{item['must_check'] ? $t('ModelManagement["是"]') : $t('ModelManagement["否"]')}}
-                    </template>
-                    <template v-else-if="header.id==='operation'">
-                        <button class="text-primary mr10"
-                            :disabled="!isEditable(item)"
-                            @click.stop="editVerification(item)">
-                            {{$t('Common["编辑"]')}}
-                        </button>
-                        <button class="text-primary"
-                            :disabled="!isEditable(item)"
-                            @click.stop="deleteVerification(item)">
-                            {{$t('Common["删除"]')}}
-                        </button>
-                    </template>
-                </div>
-            </template>
-        </cmdb-table>
-        <cmdb-slider
-            :width="450"
-            :title="slider.title"
-            :isShow.sync="slider.isShow">
-            <the-verification-detail
-                class="slider-content"
-                slot="content"
-                :isReadOnly="isReadOnly"
-                :isEdit="slider.isEdit"
-                :verification="slider.verification"
-                :attributeList="attributeList"
-                @save="saveVerification"
-                @cancel="slider.isShow = false">
-            </the-verification-detail>
-        </cmdb-slider>
+      </cmdb-auth>
     </div>
+    <bk-table
+      class="verification-table"
+      v-bkloading="{
+        isLoading: $loading(['searchObjectUniqueConstraints', 'deleteObjectUniqueConstraints'])
+      }"
+      :data="table.list"
+      :max-height="$APP.height - 320"
+      :row-style="{
+        cursor: 'pointer'
+      }"
+      @cell-click="handleShowDetails">
+      <bk-table-column :label="$t('校验规则')" class-name="is-highlight" show-overflow-tooltip>
+        <template slot-scope="{ row }">
+          {{getRuleName(row.keys)}}
+        </template>
+      </bk-table-column>
+      <bk-table-column :label="$t('属性为空值是否校验')">
+        <template slot-scope="{ row }">
+          {{row.must_check ? $t('是') : $t('否')}}
+        </template>
+      </bk-table-column>
+      <bk-table-column prop="operation"
+        v-if="updateAuth && !isTopoModel"
+        :label="$t('操作')">
+        <template slot-scope="{ row }">
+          <button class="text-primary mr10 operation-btn"
+            :disabled="!isEditable(row)"
+            @click.stop="editVerification(row)">
+            {{$t('编辑')}}
+          </button>
+          <button class="text-primary operation-btn"
+            :disabled="!isEditable(row) || row.must_check"
+            @click.stop="deleteVerification(row)">
+            {{$t('删除')}}
+          </button>
+        </template>
+      </bk-table-column>
+      <cmdb-table-empty slot="empty" :stuff="table.stuff"></cmdb-table-empty>
+    </bk-table>
+    <bk-sideslider
+      v-transfer-dom
+      :width="450"
+      :title="slider.title"
+      :is-show.sync="slider.isShow"
+      :before-close="handleSliderBeforeClose">
+      <the-verification-detail
+        ref="verificationForm"
+        slot="content"
+        v-if="slider.isShow"
+        :is-read-only="isReadOnly || slider.isReadOnly"
+        :is-edit="slider.isEdit"
+        :verification="slider.verification"
+        :attribute-list="attributeList"
+        @save="saveVerification"
+        @cancel="handleSliderBeforeClose">
+      </the-verification-detail>
+    </bk-sideslider>
+  </div>
 </template>
 
 <script>
-    import theVerificationDetail from './verification-detail'
-    import { mapActions, mapGetters } from 'vuex'
-    export default {
-        components: {
-            theVerificationDetail
+  import theVerificationDetail from './verification-detail'
+  import { mapActions, mapGetters } from 'vuex'
+  export default {
+    components: {
+      theVerificationDetail
+    },
+    props: {
+      modelId: {
+        type: Number,
+        default: null
+      }
+    },
+    data() {
+      return {
+        slider: {
+          isShow: false,
+          isEdit: false,
+          verification: {}
         },
-        data () {
-            return {
-                slider: {
-                    isShow: false,
-                    isEdit: false,
-                    verification: {}
-                },
-                table: {
-                    header: [{
-                        id: 'keys',
-                        name: this.$t('ModelManagement["校验规则"]')
-                    }, {
-                        id: 'must_check',
-                        name: this.$t('ModelManagement["是否为必须校验"]')
-                    }, {
-                        id: 'operation',
-                        name: this.$t('Common["操作"]')
-                    }],
-                    list: []
-                },
-                attributeList: []
+        table: {
+          list: [],
+          stuff: {
+            type: 'default',
+            payload: {
+              emptyText: this.$t('bk.table.emptyText')
             }
+          }
         },
-        computed: {
-            ...mapGetters(['isAdminView', 'isBusinessSelected']),
-            ...mapGetters('objectModel', [
-                'activeModel',
-                'isInjectable'
-            ]),
-            isReadOnly () {
-                if (this.activeModel) {
-                    return this.activeModel['bk_ispaused']
-                }
-                return false
-            },
-            authority () {
-                const cantEdit = ['process', 'plat']
-                if (cantEdit.includes(this.$route.params.modelId)) {
-                    return []
-                }
-                if (this.isAdminView || (this.isBusinessSelected && this.isInjectable)) {
-                    return ['search', 'update', 'delete']
-                }
-                return []
-            }
-        },
-        async created () {
-            if (!this.authority.includes('update')) {
-                this.table.header.pop()
-            }
+        attributeList: [],
+        updateAuth: false
+      }
+    },
+    computed: {
+      ...mapGetters('objectModel', [
+        'activeModel'
+      ]),
+      isTopoModel() {
+        return ['bk_biz_topo', 'bk_organization'].includes(this.activeModel.bk_classification_id)
+      },
+      isReadOnly() {
+        if (this.activeModel) {
+          return this.activeModel.bk_ispaused
+        }
+        return false
+      }
+    },
+    watch: {
+      activeModel: {
+        immediate: true,
+        handler(activeModel) {
+          if (activeModel.bk_obj_id) {
             this.initAttrList()
             this.searchVerification()
-        },
-        methods: {
-            ...mapActions('objectModelProperty', [
-                'searchObjectAttribute'
-            ]),
-            ...mapActions('objectUnique', [
-                'searchObjectUniqueConstraints',
-                'deleteObjectUniqueConstraints'
-            ]),
-            isEditable (item) {
-                if (item.ispre) {
-                    return false
-                }
-                if (this.isReadOnly) {
-                    return false
-                }
-                if (!this.isAdminView) {
-                    return !!this.$tools.getMetadataBiz(item)
-                }
-                return true
-            },
-            getRuleName (keys) {
-                let name = []
-                keys.forEach(key => {
-                    if (key['key_kind'] === 'property') {
-                        let attr = this.attributeList.find(({id}) => id === key['key_id'])
-                        if (attr) {
-                            name.push(attr['bk_property_name'])
-                        }
-                    }
-                })
-                return name.join('+')
-            },
-            async initAttrList () {
-                this.attributeList = await this.searchObjectAttribute({
-                    params: this.$injectMetadata({
-                        bk_obj_id: this.activeModel['bk_obj_id']
-                    }),
-                    config: {
-                        requestId: `post_searchObjectAttribute_${this.activeModel['bk_obj_id']}`
-                    }
-                })
-            },
-            createVerification () {
-                this.slider.title = this.$t('ModelManagement["新建校验"]')
-                this.slider.isEdit = false
-                this.slider.isShow = true
-            },
-            editVerification (verification) {
-                this.slider.title = this.$t('ModelManagement["编辑校验"]')
-                this.slider.verification = verification
-                this.slider.isEdit = true
-                this.slider.isShow = true
-            },
-            saveVerification () {
-                this.slider.isShow = false
-                this.searchVerification()
-            },
-            deleteVerification (verification) {
-                this.$bkInfo({
-                    title: this.$tc('ModelManagement["确定删除唯一校验？"]', this.getRuleName(verification.keys), {name: this.getRuleName(verification.keys)}),
-                    confirmFn: async () => {
-                        await this.deleteObjectUniqueConstraints({
-                            objId: verification['bk_obj_id'],
-                            id: verification.id,
-                            config: {
-                                requestId: 'deleteObjectUniqueConstraints'
-                            }
-                        })
-                        this.searchVerification()
-                    }
-                })
-            },
-            async searchVerification () {
-                const res = await this.searchObjectUniqueConstraints({
-                    objId: this.activeModel['bk_obj_id'],
-                    params: this.$injectMetadata(),
-                    config: {
-                        requestId: 'searchObjectUniqueConstraints'
-                    }
-                })
-                this.table.list = res
-            }
+          }
         }
+      }
+    },
+    methods: {
+      ...mapActions('objectModelProperty', [
+        'searchObjectAttribute'
+      ]),
+      ...mapActions('objectUnique', [
+        'searchObjectUniqueConstraints',
+        'deleteObjectUniqueConstraints'
+      ]),
+      isEditable(item) {
+        if (item.ispre || this.isReadOnly) {
+          return false
+        }
+        return true
+      },
+      getRuleName(keys) {
+        const name = []
+        keys.forEach((key) => {
+          if (key.key_kind === 'property') {
+            const attr = this.attributeList.find(({ id }) => id === key.key_id)
+            if (attr) {
+              name.push(attr.bk_property_name)
+            }
+          }
+        })
+        return name.join('+')
+      },
+      async initAttrList() {
+        this.attributeList = await this.searchObjectAttribute({
+          params: {
+            bk_obj_id: this.activeModel.bk_obj_id
+          },
+          config: {
+            requestId: `post_searchObjectAttribute_${this.activeModel.bk_obj_id}`
+          }
+        })
+      },
+      createVerification() {
+        this.slider.title = this.$t('新建校验')
+        this.slider.isEdit = false
+        this.slider.isReadOnly = false
+        this.slider.isShow = true
+      },
+      editVerification(verification) {
+        this.slider.title = this.$t('编辑校验')
+        this.slider.verification = verification
+        this.slider.isEdit = true
+        this.slider.isReadOnly = false
+        this.slider.isShow = true
+      },
+      saveVerification() {
+        this.slider.isShow = false
+        this.searchVerification()
+      },
+      deleteVerification(verification) {
+        this.$bkInfo({
+          title: this.$tc('确定删除唯一校验', this.getRuleName(verification.keys), { name: this.getRuleName(verification.keys) }),
+          confirmFn: async () => {
+            await this.deleteObjectUniqueConstraints({
+              objId: verification.bk_obj_id,
+              id: verification.id,
+              params: {},
+              config: {
+                requestId: 'deleteObjectUniqueConstraints'
+              }
+            })
+            this.searchVerification()
+          }
+        })
+      },
+      async searchVerification() {
+        const res = await this.searchObjectUniqueConstraints({
+          objId: this.activeModel.bk_obj_id,
+          params: {},
+          config: {
+            requestId: 'searchObjectUniqueConstraints'
+          }
+        })
+        this.table.list = res
+      },
+      handleShowDetails(row, column) {
+        if (column.property === 'operation') return
+        this.slider.title = this.$t('查看校验')
+        this.slider.verification = row
+        this.slider.isEdit = true
+        this.slider.isReadOnly = true
+        this.slider.isShow = true
+      },
+      handleReceiveAuth(auth) {
+        this.updateAuth = auth
+      },
+      handleSliderBeforeClose() {
+        const hasChanged = Object.keys(this.$refs.verificationForm.changedValues).length
+        if (hasChanged) {
+          return new Promise((resolve) => {
+            this.$bkInfo({
+              title: this.$t('确认退出'),
+              subTitle: this.$t('退出会导致未保存信息丢失'),
+              extCls: 'bk-dialog-sub-header-center',
+              confirmFn: () => {
+                this.slider.isShow = false
+                resolve(true)
+              },
+              cancelFn: () => {
+                resolve(false)
+              }
+            })
+          })
+        }
+        this.slider.isShow = false
+        return true
+      }
     }
+  }
 </script>
 
 <style lang="scss" scoped>
-    .create-btn {
-        margin: 10px 0;
+    .verification-layout {
+        padding: 20px;
+    }
+    .verification-table {
+        margin: 14px 0 0 0;
+    }
+    .operation-btn[disabled] {
+        color: #dcdee5 !important;
+        opacity: 1 !important;
     }
 </style>
-

@@ -13,32 +13,36 @@
 package operation
 
 import (
-	"context"
 	"strconv"
 
+	"configcenter/src/ac/extensions"
 	"configcenter/src/apimachinery"
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
 	"configcenter/src/common/condition"
+	"configcenter/src/common/http/rest"
 	"configcenter/src/common/metadata"
-	"configcenter/src/scene_server/topo_server/core/types"
 )
 
 type GraphicsOperationInterface interface {
-	SelectObjectTopoGraphics(params types.ContextParams, scopeType, scopeID string) ([]metadata.TopoGraphics, error)
-	UpdateObjectTopoGraphics(params types.ContextParams, scopeType, scopeID string, datas []metadata.TopoGraphics) error
+	SelectObjectTopoGraphics(kit *rest.Kit, scopeType, scopeID string) ([]metadata.TopoGraphics, error)
+	UpdateObjectTopoGraphics(kit *rest.Kit, scopeType, scopeID string, datas []metadata.TopoGraphics) error
 
 	SetProxy(obj ObjectOperationInterface, asst AssociationOperationInterface)
 }
 
-func NewGraphics(client apimachinery.ClientSetInterface) GraphicsOperationInterface {
-	return &graphics{clientSet: client}
+func NewGraphics(client apimachinery.ClientSetInterface, authManager *extensions.AuthManager) GraphicsOperationInterface {
+	return &graphics{
+		clientSet:   client,
+		authManager: authManager,
+	}
 }
 
 type graphics struct {
-	clientSet apimachinery.ClientSetInterface
-	obj       ObjectOperationInterface
-	asst      AssociationOperationInterface
+	clientSet   apimachinery.ClientSetInterface
+	obj         ObjectOperationInterface
+	asst        AssociationOperationInterface
+	authManager *extensions.AuthManager
 }
 
 func (g *graphics) SetProxy(obj ObjectOperationInterface, asst AssociationOperationInterface) {
@@ -46,44 +50,40 @@ func (g *graphics) SetProxy(obj ObjectOperationInterface, asst AssociationOperat
 	g.asst = asst
 }
 
-func (g *graphics) SelectObjectTopoGraphics(params types.ContextParams, scopeType, scopeID string) ([]metadata.TopoGraphics, error) {
+func (g *graphics) SelectObjectTopoGraphics(kit *rest.Kit, scopeType, scopeID string) ([]metadata.TopoGraphics, error) {
+	graphCondition := &metadata.TopoGraphics{}
+	graphCondition.SetScopeType(scopeType)
+	graphCondition.SetScopeID(scopeID)
 
-	graphcondition := &metadata.TopoGraphics{}
-	graphcondition.SetScopeType(scopeType)
-	graphcondition.SetScopeID(scopeID)
-	if nil != params.MetaData {
-		graphcondition.SetMetaData(*params.MetaData)
-	}
-	rsp, err := g.clientSet.ObjectController().Meta().SearchTopoGraphics(context.Background(), params.Header, graphcondition)
+	rsp, err := g.clientSet.CoreService().TopoGraphics().SearchTopoGraphics(kit.Ctx, kit.Header, graphCondition)
 	if nil != err {
 		return nil, err
 	}
 
 	if !rsp.Result {
-		blog.Errorf("[graphics] failed to search the graphics , error info is %s", rsp.ErrMsg)
-		return nil, params.Err.New(common.CCErrTopoGraphicsSearchFailed, rsp.ErrMsg)
+		blog.Errorf("[graphics] failed to search the graphics , error info is %s, rid: %s", rsp.ErrMsg, kit.Rid)
+		return nil, kit.CCError.New(common.CCErrTopoGraphicsSearchFailed, rsp.ErrMsg)
 	}
 
-	dbnodes := rsp.Data
+	dbNodes := rsp.Data
 
-	graphnodes := map[string]*metadata.TopoGraphics{}
-	for index, node := range dbnodes {
-		graphnodes[node.NodeType+node.ObjID+strconv.Itoa(node.InstID)] = &dbnodes[index]
+	graphNodes := map[string]*metadata.TopoGraphics{}
+	for index, node := range dbNodes {
+		graphNodes[node.NodeType+node.ObjID+strconv.Itoa(node.InstID)] = &dbNodes[index]
 	}
 
-	nodes := []metadata.TopoGraphics{}
+	nodes := make([]metadata.TopoGraphics, 0)
 	if scopeType == "global" {
-
-		objs, err := g.obj.FindObject(params, condition.CreateCondition())
+		objs, err := g.obj.FindObject(kit, condition.CreateCondition())
 		if err != nil {
-			blog.Errorf("SelectObject failed %v", err.Error())
-			return nil, params.Err.New(common.CCErrTopoGraphicsSearchFailed, err.Error())
+			blog.Errorf("SelectObject failed %v, rid: %s", err.Error(), kit.Rid)
+			return nil, kit.CCError.New(common.CCErrTopoGraphicsSearchFailed, err.Error())
 		}
 
-		assts, err := g.asst.SearchObjectAssociation(params, "")
+		assts, err := g.asst.SearchObjectAssociation(kit, "")
 		if err != nil {
-			blog.Errorf("SelectObjectAsst failed %v", err.Error())
-			return nil, params.Err.New(common.CCErrTopoGraphicsSearchFailed, err.Error())
+			blog.Errorf("SelectObjectAsst failed %v, rid: %s", err.Error(), kit.Rid)
+			return nil, kit.CCError.New(common.CCErrTopoGraphicsSearchFailed, err.Error())
 		}
 
 		objAssts := map[string][]metadata.Association{}
@@ -104,10 +104,10 @@ func (g *graphics) SelectObjectTopoGraphics(params types.ContextParams, scopeTyp
 			node.SetIsPre(object.IsPre)
 			node.SetIcon(object.ObjIcon)
 
-			oldnode := graphnodes[node.NodeType+node.ObjID+strconv.Itoa(node.InstID)]
-			if oldnode != nil {
-				node.SetPosition(oldnode.Position)
-				node.SetExt(oldnode.Ext)
+			oldNode := graphNodes[node.NodeType+node.ObjID+strconv.Itoa(node.InstID)]
+			if oldNode != nil {
+				node.SetPosition(oldNode.Position)
+				node.SetExt(oldNode.Ext)
 			} else {
 				node.SetPosition(metadata.Position{})
 				node.SetExt(map[string]interface{}{})
@@ -121,20 +121,20 @@ func (g *graphics) SelectObjectTopoGraphics(params types.ContextParams, scopeTyp
 					Condition: typeCond.ToMapStr(),
 				}
 
-				resp, err := g.asst.SearchType(params, request)
+				resp, err := g.asst.SearchType(kit, request)
 				if err != nil {
-					blog.Errorf("select object topo graph failed, because get association kind[%s] failed, err: %v", asst.AsstKindID, err)
-					return nil, params.Err.Errorf(common.CCErrTopoGetAssociationKindFailed, asst.AsstKindID)
+					blog.Errorf("select object topo graph failed, because get association kind[%s] failed, err: %v, rid: %s", asst.AsstKindID, err, kit.Rid)
+					return nil, kit.CCError.Errorf(common.CCErrTopoGetAssociationKindFailed, asst.AsstKindID)
 				}
 				if !resp.Result {
-					blog.Errorf("select object topo graph failed, because get association kind[%s] failed, err: %v", asst.AsstKindID, resp.ErrMsg)
-					return nil, params.Err.Errorf(common.CCErrTopoGetAssociationKindFailed, asst.AsstKindID)
+					blog.Errorf("select object topo graph failed, because get association kind[%s] failed, err: %v, rid: %s", asst.AsstKindID, resp.ErrMsg, kit.Rid)
+					return nil, kit.CCError.Errorf(common.CCErrTopoGetAssociationKindFailed, asst.AsstKindID)
 				}
 
 				// should only be one association kind.
 				if len(resp.Data.Info) == 0 {
-					blog.Errorf("select object topo graph failed, because get association kind[%s] failed, err: can not find this association kind.", asst.AsstKindID)
-					return nil, params.Err.Errorf(common.CCErrTopoGetAssociationKindFailed, asst.AsstKindID)
+					blog.Errorf("select object topo graph failed, because get association kind[%s] failed, err: can not find this association kind., rid: %s", asst.AsstKindID, kit.Rid)
+					return nil, kit.CCError.Errorf(common.CCErrTopoGetAssociationKindFailed, asst.AsstKindID)
 				}
 
 				node.Assts = append(node.Assts, metadata.GraphAsst{
@@ -153,24 +153,21 @@ func (g *graphics) SelectObjectTopoGraphics(params types.ContextParams, scopeTyp
 	return nodes, nil
 }
 
-func (g *graphics) UpdateObjectTopoGraphics(params types.ContextParams, scopeType, scopeID string, datas []metadata.TopoGraphics) error {
-
+func (g *graphics) UpdateObjectTopoGraphics(kit *rest.Kit, scopeType, scopeID string, datas []metadata.TopoGraphics) error {
 	for index := range datas {
 		datas[index].SetScopeType(scopeType)
 		datas[index].SetScopeID(scopeID)
-		if nil != params.MetaData {
-			datas[index].SetMetaData(*params.MetaData)
-		}
 	}
-	rsp, err := g.clientSet.ObjectController().Meta().UpdateTopoGraphics(context.Background(), params.Header, datas)
+
+	rsp, err := g.clientSet.CoreService().TopoGraphics().UpdateTopoGraphics(kit.Ctx, kit.Header, datas)
 	if err != nil {
-		blog.Errorf("UpdateGraphics failed %v", err.Error())
-		return params.Err.New(common.CCErrTopoGraphicsUpdateFailed, err.Error())
+		blog.Errorf("UpdateGraphics failed %v, rid: %s", err.Error(), kit.Rid)
+		return kit.CCError.New(common.CCErrTopoGraphicsUpdateFailed, err.Error())
 	}
 
 	if !rsp.Result {
-		blog.Errorf("[graphics] failed to update the graphics, error info is %s", rsp.ErrMsg)
-		return params.Err.New(common.CCErrTopoGraphicsUpdateFailed, rsp.ErrMsg)
+		blog.Errorf("[graphics] failed to update the graphics, error info is %s, rid: %s", rsp.ErrMsg, kit.Rid)
+		return kit.CCError.New(common.CCErrTopoGraphicsUpdateFailed, rsp.ErrMsg)
 	}
 
 	return nil

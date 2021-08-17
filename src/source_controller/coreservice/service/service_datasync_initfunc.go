@@ -14,13 +14,24 @@ package service
 
 import (
 	"net/http"
+
+	"configcenter/src/common/http/rest"
+
+	"github.com/emicklei/go-restful"
 )
 
-func (s *coreService) initDataSynchronize() {
+func (s *coreService) initDataSynchronize(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.engine.CCErr,
+		Language: s.engine.Language,
+	})
 
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/set/synchronize/instance", HandlerFunc: s.SynchronizeInstance})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/set/synchronize/model", HandlerFunc: s.SynchronizeModel})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/set/synchronize/association", HandlerFunc: s.SynchronizeAssociation})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/read/synchronize", HandlerFunc: s.SynchronizeFind})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/clear/synchronize/data", HandlerFunc: s.SynchronizeClearData})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/set/synchronize/instance", Handler: s.SynchronizeInstance})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/set/synchronize/model", Handler: s.SynchronizeModel})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/set/synchronize/association", Handler: s.SynchronizeAssociation})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/read/synchronize", Handler: s.SynchronizeFind})
+	utility.AddHandler(rest.Action{Verb: http.MethodDelete, Path: "/clear/synchronize/data", Handler: s.SynchronizeClearData})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/set/synchronize/identifier/flag", Handler: s.SetIdentifierFlag})
+
+	utility.AddToRestfulWebService(web)
 }

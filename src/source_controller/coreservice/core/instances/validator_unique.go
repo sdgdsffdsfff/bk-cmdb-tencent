@@ -17,180 +17,211 @@ import (
 
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
+	"configcenter/src/common/http/rest"
 	"configcenter/src/common/mapstr"
 	"configcenter/src/common/metadata"
+	"configcenter/src/common/universalsql"
 	"configcenter/src/common/universalsql/mongo"
 	"configcenter/src/common/util"
-	"configcenter/src/source_controller/coreservice/core"
 )
 
-// validCreateUnique  valid create inst data unique
-func (valid *validator) validCreateUnique(ctx core.ContextParams, instanceData mapstr.MapStr, instMedataData metadata.Metadata, instanceManager *instanceManager) error {
-	uniqueAttr, err := valid.dependent.SearchUnique(ctx, valid.objID)
-	if nil != err {
-		blog.Errorf("[validCreateUnique] search [%s] unique error %v", valid.objID, err)
+var hostSpecialFieldMap = map[string]bool{
+	common.BKHostInnerIPField: true,
+	common.BKHostOuterIPField: true,
+	common.BKOperatorField:    true,
+	common.BKBakOperatorField: true,
+}
+
+type validUniqueOption struct {
+	Condition  universalsql.Condition
+	UniqueKeys []string
+}
+
+// validCreateUnique valid create inst data unique
+func (valid *validator) validCreateUnique(kit *rest.Kit, instanceData mapstr.MapStr, instanceManager *instanceManager) error {
+	uniqueOpts, err := valid.getValidUniqueOptions(kit, instanceData, instanceManager)
+	if err != nil {
+		blog.Errorf("[validCreateUnique] getValidUniqueOptions error %v, data: %#v, rid: %s", err, instanceData, kit.Rid)
 		return err
 	}
 
-	if 0 >= len(uniqueAttr) {
-		blog.Warnf("[validCreateUnique] there're not unique constraint for %s, return", valid.objID)
-		return nil
-	}
-
-	for _, unique := range uniqueAttr {
-		// retrive unique value
-		uniquekeys := map[string]bool{}
-		for _, key := range unique.Keys {
-			switch key.Kind {
-			case metadata.UniqueKeyKindProperty:
-				property, ok := valid.idToProperty[int64(key.ID)]
-				if !ok {
-					blog.Errorf("[validCreateUnique] find [%s] property [%d] error %v", valid.objID, key.ID)
-					return valid.errif.Errorf(common.CCErrTopoObjectPropertyNotFound, key.ID)
-				}
-				uniquekeys[property.PropertyID] = true
-			default:
-				blog.Errorf("[validCreateUnique] find [%s] property [%d] unique kind invalid [%d]", valid.objID, key.ID, key.Kind)
-				return valid.errif.Errorf(common.CCErrTopoObjectUniqueKeyKindInvalid, key.Kind)
-			}
-		}
-
-		cond := mongo.NewCondition()
-
-		anyEmpty := false
-		for key := range uniquekeys {
-			val, ok := instanceData[key]
-			if !ok || isEmpty(val) {
-				anyEmpty = true
-			}
-			cond.Element(&mongo.Eq{Key: key, Val: val})
-		}
-
-		if anyEmpty && !unique.MustCheck {
-			continue
-		}
-
-		// only search data not in diable status
+	for _, opt := range uniqueOpts {
+		cond := opt.Condition
+		// only search data not in disable status
 		cond.Element(&mongo.Neq{Key: common.BKDataStatusField, Val: common.DataStatusDisabled})
 		if common.GetObjByType(valid.objID) == common.BKInnerObjIDObject {
 			cond.Element(&mongo.Eq{Key: common.BKObjIDField, Val: valid.objID})
 		}
 
-		isExsit, bizID := instMedataData.Label.Get(common.BKAppIDField)
-		if isExsit {
-			_, metaCond := cond.Embed(metadata.BKMetadata)
-			_, lableCond := metaCond.Embed(metadata.BKLabel)
-			lableCond.Element(&mongo.Eq{Key: common.BKAppIDField, Val: bizID})
-		}
-
-		searchCond := metadata.QueryCondition{Condition: cond.ToMapStr()}
-		result, err := instanceManager.SearchModelInstance(ctx, valid.objID, searchCond)
-		if nil != err {
-			blog.Errorf("[validCreateUnique] search [%s] inst error %v", valid.objID, err)
+		if err := valid.validUniqueByCond(kit, instanceManager, cond.ToMapStr(), opt.UniqueKeys); err != nil {
 			return err
 		}
-
-		if 0 < result.Count {
-			blog.Errorf("[validCreateUnique] duplicate data condition: %#v, unique keys: %#v, objID %s", cond.ToMapStr(), uniquekeys, valid.objID)
-			propertyNames := []string{}
-			for key := range uniquekeys {
-				propertyNames = append(propertyNames, util.FirstNotEmptyString(ctx.Lang.Language(valid.objID+"_property_"+key), valid.propertys[key].PropertyName, key))
-			}
-
-			return valid.errif.Errorf(common.CCErrCommDuplicateItem, strings.Join(propertyNames, ","))
-		}
-
 	}
 
 	return nil
 }
 
 // validUpdateUnique valid update unique
-func (valid *validator) validUpdateUnique(ctx core.ContextParams, instanceData mapstr.MapStr, instMedataData metadata.Metadata, instID uint64, instanceManager *instanceManager) error {
-	mapData, err := instanceManager.getInstDataByID(ctx, valid.objID, instID, instanceManager)
-	if nil != err {
-		blog.Errorf("[validUpdateUnique] search [%s] inst error %v", valid.objID, err)
+func (valid *validator) validUpdateUnique(kit *rest.Kit, updateData mapstr.MapStr, instanceData mapstr.MapStr, instID int64, instanceManager *instanceManager) error {
+	// we need the complete updated instance data, override the db's original instance with updataData
+	// considering the following scene
+	// when updating a module's name, the whole update data is just {"bk_module_name":"new_name"}
+	// as we know, the module's unique key has 3 fields: bk_biz_id, bk_set_id and bk_module_name
+	// we can't just validate the "bk_module_name", but validate "bk_biz_id - bk_set_id - bk_module_name" as a whole
+	// we need know all of the three fields value so that we can validate if the module's name is duplicate
+	for k, v := range updateData {
+		instanceData[k] = v
+	}
+	uniqueOpts, err := valid.getValidUniqueOptions(kit, instanceData, instanceManager)
+	if err != nil {
+		blog.Errorf("[validCreateUnique] getValidUniqueOptions error %v, data: %#v, rid: %s", err, instanceData, kit.Rid)
 		return err
 	}
 
-	// retrive isonly value
-	for key, val := range instanceData {
-		mapData[key] = val
-	}
-
-	uniqueAttr, err := valid.dependent.SearchUnique(ctx, valid.objID)
-	if nil != err {
-		blog.Errorf("[validUpdateUnique] search [%s] unique error %v", valid.objID, err)
-		return err
-	}
-
-	if 0 >= len(uniqueAttr) {
-		blog.Warnf("[validUpdateUnique] there're not unique constraint for %s, return", valid.objID)
-		return nil
-	}
-
-	for _, unique := range uniqueAttr {
-		// retrive unique value
-		uniquekeys := map[string]bool{}
-		for _, key := range unique.Keys {
-			switch key.Kind {
-			case metadata.UniqueKeyKindProperty:
-				property, ok := valid.idToProperty[int64(key.ID)]
-				if !ok {
-					blog.Errorf("[validUpdateUnique] find [%s] property [%d] error %v", valid.objID, key.ID)
-					return valid.errif.Errorf(common.CCErrTopoObjectPropertyNotFound, property.ID)
-				}
-				uniquekeys[property.PropertyID] = true
-			default:
-				blog.Errorf("[validUpdateUnique] find [%s] property [%d] unique kind invalid [%d]", valid.objID, key.ID, key.Kind)
-				return valid.errif.Errorf(common.CCErrTopoObjectUniqueKeyKindInvalid, key.Kind)
+	for _, opt := range uniqueOpts {
+		needCheck := false
+		// only check the unique field which need update
+		for _, key := range opt.UniqueKeys {
+			if _, ok := updateData[key]; ok {
+				needCheck = true
 			}
 		}
-
-		cond := mongo.NewCondition()
-		anyEmpty := false
-		for key := range uniquekeys {
-			val, ok := instanceData[key]
-			if !ok || isEmpty(val) {
-				anyEmpty = true
-			}
-			cond.Element(&mongo.Eq{Key: key, Val: val})
-		}
-
-		if anyEmpty && !unique.MustCheck {
+		if !needCheck {
 			continue
 		}
 
-		// only search data not in diable status
+		cond := opt.Condition
+		// only search data not in disable status
 		cond.Element(&mongo.Neq{Key: common.BKDataStatusField, Val: common.DataStatusDisabled})
 		if common.GetObjByType(valid.objID) == common.BKInnerObjIDObject {
 			cond.Element(&mongo.Eq{Key: common.BKObjIDField, Val: valid.objID})
 		}
 		cond.Element(&mongo.Neq{Key: common.GetInstIDField(valid.objID), Val: instID})
-		isExsit, bizID := instMedataData.Label.Get(common.BKAppIDField)
-		if isExsit {
-			_, metaCond := cond.Embed(metadata.BKMetadata)
-			_, lableCond := metaCond.Embed(metadata.BKLabel)
-			lableCond.Element(&mongo.Eq{Key: common.BKAppIDField, Val: bizID})
-		}
 
-		searchCond := metadata.QueryCondition{Condition: cond.ToMapStr()}
-		result, err := instanceManager.SearchModelInstance(ctx, valid.objID, searchCond)
-		if nil != err {
-			blog.Errorf("[validUpdateUnique] search [%s] inst error %v", valid.objID, err)
+		if err := valid.validUniqueByCond(kit, instanceManager, cond.ToMapStr(), opt.UniqueKeys); err != nil {
 			return err
 		}
+	}
 
-		if 0 < result.Count {
-			blog.Errorf("[validUpdateUnique] duplicate data condition: %#v, origin: %#v, unique keys: %v, objID: %s, instID %v count %d", cond.ToMapStr(), mapData, uniquekeys, valid.objID, instID, result.Count)
-			propertyNames := []string{}
-			for key := range uniquekeys {
-				propertyNames = append(propertyNames, util.FirstNotEmptyString(ctx.Lang.Language(valid.objID+"_property_"+key), valid.propertys[key].PropertyName, key))
+	return nil
+}
+
+// getValidUniqueOptions get unique option used for validating the instances
+func (valid *validator) getValidUniqueOptions(kit *rest.Kit, data mapstr.MapStr, instanceManager *instanceManager) ([]validUniqueOption, error) {
+	uniqueOpts := make([]validUniqueOption, 0)
+
+	for _, unique := range valid.uniqueAttrs {
+		// retrieve unique value
+		uniqueKeys := make([]string, 0)
+		for _, key := range unique.Keys {
+			switch key.Kind {
+			case metadata.UniqueKeyKindProperty:
+				property, ok := valid.idToProperty[int64(key.ID)]
+				if !ok {
+					blog.Errorf("find [%s] property [%d] error %v, rid: %s", valid.objID, key.ID, kit.Rid)
+					return nil, valid.errIf.Errorf(common.CCErrTopoObjectPropertyNotFound, property.ID)
+				}
+				uniqueKeys = append(uniqueKeys, property.PropertyID)
+			default:
+				blog.Errorf("find [%s] property [%d] unique kind invalid [%d], rid: %s", valid.objID, key.ID, key.Kind, kit.Rid)
+				return nil, valid.errIf.Errorf(common.CCErrTopoObjectUniqueKeyKindInvalid, key.Kind)
 			}
+		}
 
-			return valid.errif.Errorf(common.CCErrCommDuplicateItem, strings.Join(propertyNames, ","))
+		cond := mongo.NewCondition()
+		anyEmpty := false
+		for _, key := range uniqueKeys {
+			val, ok := data[key]
+			if !ok || isEmpty(val) {
+				anyEmpty = true
+			}
+			if valid.objID == common.BKInnerObjIDHost && hostSpecialFieldMap[key] {
+				valStr, _ := val.(string)
+				valArr := strings.Split(valStr, ",")
+				cond.Element(&mongo.KV{
+					Key: key,
+					Val: map[string]interface{}{
+						common.BKDBIN: valArr,
+					},
+				})
+			} else {
+				cond.Element(&mongo.Eq{Key: key, Val: val})
+			}
+		}
 
+		if anyEmpty && !unique.MustCheck {
+			continue
+		}
+		uniqueOpts = append(uniqueOpts, validUniqueOption{Condition: cond, UniqueKeys: uniqueKeys})
+	}
+
+	return uniqueOpts, nil
+}
+
+// validUniqueByCond valid instance unique by condition
+func (valid *validator) validUniqueByCond(kit *rest.Kit, instanceManager *instanceManager, cond mapstr.MapStr, uniqueKeys []string) error {
+	result, err := instanceManager.countInstance(kit, valid.objID, cond)
+	if nil != err {
+		blog.Errorf("[validUniqueByCond] count [%s] inst error %v, condition: %#v, rid: %s", valid.objID, err, cond, kit.Rid)
+		return err
+	}
+
+	if result > 0 {
+		blog.Errorf("[validUniqueByCond] duplicate data condition: %#v, unique keys: %#v, objID %s, rid: %s", cond, uniqueKeys, valid.objID, kit.Rid)
+		propertyNames := make([]string, 0)
+		lang := util.GetLanguage(kit.Header)
+		language := valid.language.CreateDefaultCCLanguageIf(lang)
+		for _, key := range uniqueKeys {
+			propertyNames = append(propertyNames, util.FirstNotEmptyString(language.Language(valid.objID+"_property_"+key), valid.properties[key].PropertyName, key))
+		}
+		return valid.errIf.Errorf(common.CCErrCommDuplicateItem, strings.Join(propertyNames, ","))
+	}
+
+	return nil
+}
+
+// hasUniqueFields judge if the update data has any unique fields
+func (valid *validator) hasUniqueFields(updateData mapstr.MapStr, uniqueOpts []validUniqueOption) (has bool, uniqueFields []string) {
+	for _, opt := range uniqueOpts {
+		if len(opt.UniqueKeys) == 0 {
+			continue
+		}
+
+		keyCnt := 0
+		// opt.UniqueKeys may have many keys as a union unique key
+		// eg: for module, opt.UniqueKeys is [bk_biz_id, bk_set_id, bk_module_name]
+		for _, key := range opt.UniqueKeys {
+			if _, ok := updateData[key]; !ok {
+				continue
+			}
+			keyCnt++
+		}
+		if keyCnt == len(opt.UniqueKeys) {
+			return true, opt.UniqueKeys
 		}
 	}
-	return nil
+
+	return false, make([]string, 0)
+}
+
+// validUpdateUniqFieldInMulti validate if it update unique field in multiple records
+func (valid *validator) validUpdateUniqFieldInMulti(kit *rest.Kit, updateData mapstr.MapStr, instanceManager *instanceManager) error {
+	uniqueOpts, err := valid.getValidUniqueOptions(kit, updateData, instanceManager)
+	if err != nil {
+		blog.Errorf("validUpdateUniqFieldInMulti failed, getValidUniqueOptions error %v, updateData: %#v, rid: %s", err, updateData, kit.Rid)
+		return err
+	}
+
+	hasUniqueField, uniqueFields := valid.hasUniqueFields(updateData, uniqueOpts)
+	if hasUniqueField == false {
+		return nil
+	}
+
+	propertyNames := make([]string, 0)
+	lang := util.GetLanguage(kit.Header)
+	language := valid.language.CreateDefaultCCLanguageIf(lang)
+	for _, key := range uniqueFields {
+		propertyNames = append(propertyNames, util.FirstNotEmptyString(language.Language(valid.objID+"_property_"+key), valid.properties[key].PropertyName, key))
+	}
+	return valid.errIf.Errorf(common.CCErrCommDuplicateItem, strings.Join(propertyNames, ","))
 }

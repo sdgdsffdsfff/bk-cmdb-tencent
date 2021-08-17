@@ -17,17 +17,17 @@ import (
 
 	"configcenter/src/common/backbone"
 	"configcenter/src/storage/dal"
-	"configcenter/src/thirdpartyclient/esbserver"
+	"configcenter/src/thirdparty/esbserver"
 )
 
 // Logics framwork need
 type Logics struct {
 	*backbone.Engine
-	Instance dal.RDB
-	ESB      esbserver.EsbClientInterface
-	ctx      context.Context
+	db  dal.RDB
+	ESB esbserver.EsbClientInterface
+	ctx context.Context
 }
 
-func NewLogics(ctx context.Context, engine *backbone.Engine, instance dal.RDB, esb esbserver.EsbClientInterface) *Logics {
-	return &Logics{ctx: ctx, Instance: instance, Engine: engine, ESB: esb}
+func NewLogics(ctx context.Context, engine *backbone.Engine, mgoCli dal.RDB, esb esbserver.EsbClientInterface) *Logics {
+	return &Logics{ctx: ctx, db: mgoCli, Engine: engine, ESB: esb}
 }

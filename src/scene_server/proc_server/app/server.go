@@ -15,36 +15,30 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
-	"github.com/emicklei/go-restful"
-
+	"configcenter/src/ac/extensions"
 	"configcenter/src/common"
 	"configcenter/src/common/backbone"
 	"configcenter/src/common/blog"
 	"configcenter/src/common/types"
-	"configcenter/src/common/version"
 	"configcenter/src/scene_server/proc_server/app/options"
-	"configcenter/src/scene_server/proc_server/proc_service/service"
-	"configcenter/src/storage/dal/redis"
-	"configcenter/src/thirdpartyclient/esbserver"
-	"configcenter/src/thirdpartyclient/esbserver/esbutil"
+	"configcenter/src/scene_server/proc_server/logics"
+	"configcenter/src/scene_server/proc_server/service"
+	"configcenter/src/thirdparty/esbserver"
+	"configcenter/src/thirdparty/esbserver/esbutil"
 )
 
-//Run ccapi server
-func Run(ctx context.Context, op *options.ServerOption) error {
+func Run(ctx context.Context, cancel context.CancelFunc, op *options.ServerOption) error {
 
-	svrInfo, err := newServerInfo(op)
+	svrInfo, err := types.NewServerInfo(op.ServConf)
 	if err != nil {
 		blog.Errorf("fail to new server information. err: %s", err.Error())
 		return fmt.Errorf("make server information failed, err:%v", err)
 	}
 
 	procSvr := new(service.ProcServer)
-	procSvr.EsbConfigChn = make(chan esbutil.EsbConfig, 0)
-	container := restful.NewContainer()
-	container.Add(procSvr.WebService())
+	procSvr.EsbConfigChn = make(chan esbutil.EsbConfig)
 
 	input := &backbone.BackboneParameter{
 		ConfigUpdate: procSvr.OnProcessConfigUpdate,
@@ -65,24 +59,28 @@ func Run(ctx context.Context, op *options.ServerOption) error {
 			break
 		}
 	}
-	if false == configReady {
-		return fmt.Errorf("Configuration item not found")
+	if !configReady {
+		return fmt.Errorf("configuration item not found")
 	}
-	cacheDB, err := redis.NewFromConfig(*procSvr.Config.Redis)
+	mongo, err := engine.WithMongo()
 	if err != nil {
-		blog.Errorf("new redis client failed, err: %s", err.Error())
-		return fmt.Errorf("new redis client failed, err: %s", err)
+		return err
 	}
+	procSvr.Config.Mongo = &mongo
 
-	esbSrv, err := esbserver.NewEsb(engine.ApiMachineryConfig(), procSvr.EsbConfigChn)
+	esbSrv, err := esbserver.NewEsb(engine.ApiMachineryConfig(), procSvr.EsbConfigChn, nil, engine.Metric().Registry())
 	if err != nil {
 		return fmt.Errorf("create esb api  object failed. err: %v", err)
 	}
+	procSvr.AuthManager = extensions.NewAuthManager(engine.CoreAPI)
 	procSvr.Engine = engine
-	procSvr.EsbServ = esbSrv
-	procSvr.Cache = cacheDB
-	go procSvr.InitFunc()
-	if err := backbone.StartServer(ctx, engine, container); err != nil {
+	procSvr.EsbSrv = esbSrv
+	procSvr.Logic = &logics.Logic{
+		Engine: procSvr.Engine,
+	}
+
+	err = backbone.StartServer(ctx, cancel, engine, procSvr.WebService(), true)
+	if err != nil {
 		return err
 	}
 
@@ -92,32 +90,4 @@ func Run(ctx context.Context, op *options.ServerOption) error {
 	}
 
 	return nil
-}
-
-func newServerInfo(op *options.ServerOption) (*types.ServerInfo, error) {
-	ip, err := op.ServConf.GetAddress()
-	if err != nil {
-		return nil, err
-	}
-
-	port, err := op.ServConf.GetPort()
-	if err != nil {
-		return nil, err
-	}
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		return nil, err
-	}
-
-	svrInfo := &types.ServerInfo{
-		IP:       ip,
-		Port:     port,
-		HostName: hostname,
-		Scheme:   "http",
-		Version:  version.GetVersion(),
-		Pid:      os.Getpid(),
-	}
-
-	return svrInfo, nil
 }

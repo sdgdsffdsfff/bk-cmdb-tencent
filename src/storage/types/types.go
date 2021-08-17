@@ -15,68 +15,27 @@ package types
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"reflect"
 	"strconv"
 	"time"
 
-	"configcenter/src/common"
-
-	"github.com/mongodb/mongo-go-driver/bson"
+	"go.mongodb.org/mongo-driver/bson"
 )
-
-type Transaction struct {
-	TxnID      string    `bson:"bk_txn_id"`     // 事务ID,uuid
-	RequestID  string    `bson:"bk_request_id"` // 请求ID,可选项
-	Processor  string    `bson:"processor"`     // 处理进程号，结构为"IP:PORT-PID"用于识别事务session被存于那个TM多活实例
-	Status     TxStatus  `bson:"status"`        // 事务状态，作为定时补偿判断条件，这个字段需要加索引
-	CreateTime time.Time `bson:"create_time"`   // 创建时间，作为定时补偿判断条件和统计信息存在，这个字段需要加索引
-	LastTime   time.Time `bson:"last_time"`     // 修改时间，作为统计信息存在
-}
-
-func (t Transaction) IntoHeader(header http.Header) http.Header {
-	tar := http.Header{}
-	for key := range header {
-		tar.Set(key, header.Get(key))
-	}
-	tar.Set(common.BKHTTPCCTransactionID, t.TxnID)
-	return tar
-}
-
-// TxStatus describe
-type TxStatus int
-
-// TxStatus enumerations
-const (
-	TxStatusOnProgress TxStatus = iota + 1
-	TxStatusCommitted
-	TxStatusAborted
-	TxStatusException
-)
-
-func (s TxStatus) String() string {
-	switch s {
-	case TxStatusOnProgress:
-		return "OnProgress"
-	case TxStatusCommitted:
-		return "Commited"
-	case TxStatusAborted:
-		return "Aborted"
-	case TxStatusException:
-		return "Exception"
-	default:
-		return "Unknow"
-	}
-}
 
 type Document map[string]interface{}
 
 func (d Document) Decode(result interface{}) error {
+
 	out, err := bson.Marshal(d)
 	if nil != err {
 		return err
 	}
-	return bson.Unmarshal(out, result)
+	if reflect.ValueOf(result).Type().Kind() == reflect.Ptr {
+		return bson.Unmarshal(out, result)
+	} else {
+		return bson.Unmarshal(out, &result)
+	}
+
 }
 
 func (d *Document) Encode(value interface{}) error {
@@ -96,10 +55,27 @@ func (d Documents) Decode(result interface{}) error {
 	resultv := reflect.ValueOf(result)
 	switch resultv.Elem().Kind() {
 	case reflect.Slice:
-		err := decodeBsonArray(d, result)
-		if err != nil {
-			return fmt.Errorf("Decode Document array error: %v", err)
+		if resultv.Kind() != reflect.Ptr || resultv.Elem().Kind() != reflect.Slice {
+			return errors.New("result argument must be a slice address")
 		}
+		elemt := resultv.Elem().Type().Elem()
+
+		for _, doc := range d {
+			elem := reflect.New(elemt)
+
+			out, err := bson.Marshal(doc)
+			if nil != err {
+				return fmt.Errorf("Decode array error when marshal: %v, source is %s", err, doc)
+			}
+
+			err = bson.Unmarshal(out, elem.Interface())
+			if nil != err {
+				return fmt.Errorf("Decode array error when unmarshal: %v, source is %s", err, doc)
+			}
+
+			resultv.Elem().Set(reflect.Append(resultv.Elem(), elem.Elem()))
+		}
+
 		return nil
 	default:
 		if len(d) <= 0 {
@@ -107,9 +83,9 @@ func (d Documents) Decode(result interface{}) error {
 		}
 		out, err := bson.Marshal(d[0])
 		if nil != err {
-			return fmt.Errorf("Decode Documents error when marshal2: %v, source is %s", err, d[0])
+			return fmt.Errorf("Decode Documents error when marshal: %v, source is %s", err, d[0])
 		}
-		err = bson.Unmarshal(out, result)
+		err = bson.Unmarshal(out, &result)
 		if nil != err {
 			return fmt.Errorf("Decode Documents error when unmarshal: %v, source is %s", err, out)
 		}
@@ -127,10 +103,20 @@ func (d *Documents) Encode(value interface{}) error {
 	}
 	switch valuev.Kind() {
 	case reflect.Slice:
-		err := decodeBsonArray(value, d)
-		if err != nil {
-			return fmt.Errorf("Encode Document array error: %v", err)
+		var docs []Document
+		for idx := 0; idx < valuev.Len(); idx++ {
+			out, err := bson.Marshal(valuev.Index(idx).Interface())
+			if nil != err {
+				return fmt.Errorf("Encode Documents when marshal error: %v, source is %#v", err, valuev.Index(idx))
+			}
+			doc := Document{}
+			err = bson.Unmarshal(out, &doc)
+			if nil != err {
+				return fmt.Errorf("Encode Documents when unmarshal error: %v, source is %v", err, valuev.Index(idx))
+			}
+			docs = append(docs, doc)
 		}
+		*d = docs
 		return nil
 	default:
 		out, err := bson.Marshal(value)
@@ -191,6 +177,7 @@ func decodeBsonArray(inArr, outArr interface{}) error {
 
 const (
 	CommandRDBOperation              = "RDB"
+	CommandMigrateOperation          = "DBMigrate"
 	CommandWatchTransactionOperation = "WatchTransaction"
 )
 
@@ -228,4 +215,40 @@ func ParsePage(origin interface{}) *Page {
 	return &result
 }
 
-type GetServerFunc func() ([]string, error)
+type TransactionInfo struct {
+	TxnID        string    `bson:"bk_txn_id"`     // 事务ID,uuid
+	RequestID    string    `bson:"bk_request_id"` // 请求ID,可选项
+	Processor    string    `bson:"processor"`     // 处理进程号，结构为"IP:PORT-PID"用于识别事务session被存于那个TM多活实例
+	Status       TxStatus  `bson:"status"`        // 事务状态，作为定时补偿判断条件，这个字段需要加索引
+	CreateTime   time.Time `bson:"create_time"`   // 创建时间，作为定时补偿判断条件和统计信息存在，这个字段需要加索引
+	LastTime     time.Time `bson:"last_time"`     // 修改时间，作为统计信息存在
+	TMAddr       string    // TMServer IP. 存放事务对应的db session 存在TMServer地址的IP
+	SessionID    string    // 会话ID
+	SessionState string    // 会话State
+	TxnNumber    string    // 事务Number
+}
+
+type TxStatus int
+
+// TxStatus enumerations
+const (
+	TxStatusOnProgress TxStatus = iota + 1
+	TxStatusCommitted
+	TxStatusAborted
+	TxStatusException
+)
+
+func (s TxStatus) String() string {
+	switch s {
+	case TxStatusOnProgress:
+		return "OnProgress"
+	case TxStatusCommitted:
+		return "Committed"
+	case TxStatusAborted:
+		return "Aborted"
+	case TxStatusException:
+		return "Exception"
+	default:
+		return "Unknown"
+	}
+}

@@ -15,207 +15,203 @@ package service
 import (
 	"net/http"
 
-	"configcenter/src/common"
+	"configcenter/src/common/http/rest"
+
+	"github.com/emicklei/go-restful"
 )
 
-func (s *topoService) initHealth() {
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/healthz", HandlerFunc: s.Health})
-}
-
-func (s *topoService) initAssociation() {
+func (s *Service) initAssociation(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
 
 	// mainline topo methods
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/model/mainline", HandlerFunc: s.CreateMainLineObject})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/topo/model/mainline/owners/{owner_id}/objectids/{bk_obj_id}", HandlerFunc: s.DeleteMainLineObject})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/model/{owner_id}", HandlerFunc: s.SearchMainLineObjectTopo})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/model/{owner_id}/{cls_id}/{bk_obj_id}", HandlerFunc: s.SearchObjectByClassificationID})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/inst/{owner_id}/{bk_biz_id}", HandlerFunc: s.SearchBusinessTopo})
-	// TODO: delete this api, it's not used by front.
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/inst/child/{owner_id}/{obj_id}/{app_id}/{inst_id}", HandlerFunc: s.SearchMainLineChildInstTopo})
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/topo/model/{owner_id}/{cls_id}/{bk_obj_id}", Handler: s.SearchObjectByClassificationID})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/find/topo/tree/brief/biz/{bk_biz_id}", Handler: s.SearchBriefBizTopo})
 
-	// association type methods
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/association/type/action/search/batch", HandlerFunc: s.SearchObjectAssoWithAssoKindList})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/association/type/action/search", HandlerFunc: s.SearchAssociationType})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/association/type/action/create", HandlerFunc: s.CreateAssociationType})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/topo/association/type/{id}/action/update", HandlerFunc: s.UpdateAssociationType})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/topo/association/type/{id}/action/delete", HandlerFunc: s.DeleteAssociationType})
-
-	// object association methods
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/association/action/search", HandlerFunc: s.SearchObjectAssociation})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/association/action/create", HandlerFunc: s.CreateObjectAssociation})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/object/association/{id}/action/update", HandlerFunc: s.UpdateObjectAssociation})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/object/association/{id}/action/delete", HandlerFunc: s.DeleteObjectAssociation})
-
-	// inst association methods
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/association/action/search", HandlerFunc: s.SearchAssociationInst})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/association/action/create", HandlerFunc: s.CreateAssociationInst})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/inst/association/{association_id}/action/delete", HandlerFunc: s.DeleteAssociationInst})
-
-	// topo search methods
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/association/search/owner/{owner_id}/object/{bk_obj_id}", HandlerFunc: s.SearchInstByAssociation})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/association/topo/search/owner/{owner_id}/object/{bk_obj_id}/inst/{inst_id}", HandlerFunc: s.SearchInstTopo})
-
-	// ATTENTION: the following methods is not recommended
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/search/topo/owner/{owner_id}/object/{bk_object_id}/inst/{inst_id}", HandlerFunc: s.SearchInstChildTopo})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/association/action/{bk_obj_id}/import", HandlerFunc: s.ImportInstanceAssociation})
-
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initAuditLog() {
+func (s *Service) initAuditLog(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
 
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/audit/search", HandlerFunc: s.AuditQuery})
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/find/audit_dict", Handler: s.SearchAuditDict})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/audit_list", Handler: s.SearchAuditList})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/find/audit", Handler: s.SearchAuditDetail})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initCompatiblev2() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/app/searchAll", HandlerFunc: s.SearchAllApp})
+func (s *Service) initBusiness(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
 
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/openapi/set/multi/{appid}", HandlerFunc: s.UpdateMultiSet})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/openapi/set/multi/{appid}", HandlerFunc: s.DeleteMultiSet})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/openapi/set/setHost/{appid}", HandlerFunc: s.DeleteSetHost})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/app/search/{owner_id}", Handler: s.SearchBusiness})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/app/{owner_id}", Handler: s.CreateBusiness})
+	utility.AddHandler(rest.Action{Verb: http.MethodPut, Path: "/app/{owner_id}/{app_id}", Handler: s.UpdateBusiness})
+	utility.AddHandler(rest.Action{Verb: http.MethodPut, Path: "/app/status/{flag}/{owner_id}/{app_id}", Handler: s.UpdateBusinessStatus})
+	// utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/app/search/{owner_id}", Handler: s.SearchBusiness})
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/app/{app_id}/basic_info", Handler: s.GetBusinessBasicInfo})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/app/default/{owner_id}/search", Handler: s.SearchOwnerResourcePoolBusiness})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/app/default/{owner_id}", Handler: s.CreateDefaultBusiness})
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/topo/internal/{owner_id}/{app_id}", Handler: s.GetInternalModule})
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/topo/internal/{owner_id}/{app_id}/with_statistics", Handler: s.GetInternalModuleWithStatistics})
+	// find reduced business list with only few fields for business itself.
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/app/with_reduced", Handler: s.SearchReducedBusinessList})
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/app/simplify", Handler: s.ListAllBusinessSimplify})
 
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/openapi/module/multi/{" + common.BKAppIDField + "}", HandlerFunc: s.UpdateMultiModule})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/openapi/module/searchByApp/{" + common.BKAppIDField + "}", HandlerFunc: s.SearchModuleByApp})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/openapi/module/searchByProperty/{" + common.BKAppIDField + "}", HandlerFunc: s.SearchModuleBySetProperty})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/openapi/module/multi", HandlerFunc: s.AddMultiModule})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/openapi/module/multi/{" + common.BKAppIDField + "}", HandlerFunc: s.DeleteMultiModule})
-
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initBusiness() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/app/{owner_id}", HandlerFunc: s.CreateBusiness})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/app/{owner_id}/{app_id}", HandlerFunc: s.DeleteBusiness})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/app/{owner_id}/{app_id}", HandlerFunc: s.UpdateBusiness})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/app/status/{flag}/{owner_id}/{app_id}", HandlerFunc: s.UpdateBusinessStatus})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/app/search/{owner_id}", HandlerFunc: s.SearchBusiness})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/app/default/{owner_id}/search", HandlerFunc: s.SearchDefaultBusiness})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/app/default/{owner_id}", HandlerFunc: s.CreateDefaultBusiness})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/internal/{owner_id}/{app_id}", HandlerFunc: s.GetInternalModule})
+func (s *Service) initModule(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
+
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/module/{app_id}/{set_id}", Handler: s.CreateModule})
+	utility.AddHandler(rest.Action{Verb: http.MethodDelete, Path: "/module/{app_id}/{set_id}/{module_id}", Handler: s.DeleteModule})
+	utility.AddHandler(rest.Action{Verb: http.MethodPut, Path: "/module/{app_id}/{set_id}/{module_id}", Handler: s.UpdateModule})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/module/search/{owner_id}/{bk_biz_id}/{bk_set_id}", Handler: s.SearchModule})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/module/biz/{bk_biz_id}", Handler: s.SearchModuleByCondition})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/module/bk_biz_id/{bk_biz_id}", Handler: s.SearchModuleBatch})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/module/with_relation/biz/{bk_biz_id}", Handler: s.SearchModuleWithRelation})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/module/bk_biz_id/{bk_biz_id}/service_template_id/{service_template_id}", Handler: s.ListModulesByServiceTemplateID})
+	utility.AddHandler(rest.Action{Verb: http.MethodPut, Path: "/module/host_apply_enable_status/bk_biz_id/{bk_biz_id}/bk_module_id/{bk_module_id}", Handler: s.UpdateModuleHostApplyEnableStatus})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initModule() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/module/{app_id}/{set_id}", HandlerFunc: s.CreateModule})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/module/{app_id}/{set_id}/{module_id}", HandlerFunc: s.DeleteModule})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/module/{app_id}/{set_id}/{module_id}", HandlerFunc: s.UpdateModule})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/module/search/{owner_id}/{app_id}/{set_id}", HandlerFunc: s.SearchModule})
+func (s *Service) initSet(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
 
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/set/{app_id}", Handler: s.CreateSet})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/set/{app_id}/batch", Handler: s.BatchCreateSet})
+	utility.AddHandler(rest.Action{Verb: http.MethodDelete, Path: "/set/{app_id}/{set_id}", Handler: s.DeleteSet})
+	utility.AddHandler(rest.Action{Verb: http.MethodPut, Path: "/set/{app_id}/{set_id}", Handler: s.UpdateSet})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/set/search/{owner_id}/{app_id}", Handler: s.SearchSet})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/set/bk_biz_id/{bk_biz_id}", Handler: s.SearchSetBatch})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initSet() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/set/{app_id}", HandlerFunc: s.CreateSet})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/set/{app_id}/{set_id}", HandlerFunc: s.DeleteSet})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/set/{app_id}/batch", HandlerFunc: s.DeleteSets})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/set/{app_id}/{set_id}", HandlerFunc: s.UpdateSet})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/set/search/{owner_id}/{app_id}", HandlerFunc: s.SearchSet})
+func (s *Service) initInst(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
 
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/inst/search/{owner_id}/{bk_obj_id}", Handler: s.SearchInsts})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/inst/association/object/{bk_obj_id}/inst_id/{id}/offset/{start}/limit/{limit}/web", Handler: s.SearchInstAssociationUI})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/inst/association/association_object/inst_base_info", Handler: s.SearchInstAssociationWithOtherObject})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initInst() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/{owner_id}/{bk_obj_id}", HandlerFunc: s.CreateInst})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/inst/{owner_id}/{bk_obj_id}/{inst_id}", HandlerFunc: s.DeleteInst})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/inst/{owner_id}/{bk_obj_id}/batch", HandlerFunc: s.DeleteInsts})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/inst/{owner_id}/{bk_obj_id}/{inst_id}", HandlerFunc: s.UpdateInst})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/inst/{owner_id}/{bk_obj_id}/batch/update", HandlerFunc: s.UpdateInsts})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/search/{owner_id}/{bk_obj_id}", HandlerFunc: s.SearchInsts})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/search/owner/{owner_id}/object/{bk_obj_id}/detail", HandlerFunc: s.SearchInstAndAssociationDetail})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/search/owner/{owner_id}/object/{bk_obj_id}", HandlerFunc: s.SearchInstByObject})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/inst/search/{owner_id}/{bk_obj_id}/{inst_id}", HandlerFunc: s.SearchInstByInstID})
+func (s *Service) initObjectAttribute(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
 
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/update/objectattr/index/{bk_obj_id}/{id}", Handler: s.UpdateObjectAttributeIndex})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initObjectAttribute() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objectattr", HandlerFunc: s.CreateObjectAttribute})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objectattr/search", HandlerFunc: s.SearchObjectAttribute})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/objectattr/{id}", HandlerFunc: s.UpdateObjectAttribute})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/objectattr/{id}", HandlerFunc: s.DeleteObjectAttribute})
+func (s *Service) initObjectGroup(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
+
+	utility.AddHandler(rest.Action{Verb: http.MethodDelete, Path: "/objectatt/group/owner/{owner_id}/object/{bk_object_id}/propertyids/{property_id}/groupids/{group_id}", Handler: s.DeleteObjectAttributeGroup})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initObjectClassification() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/classification", HandlerFunc: s.CreateClassification})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/classification/{owner_id}/objects", HandlerFunc: s.SearchClassificationWithObjects})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/classifications", HandlerFunc: s.SearchClassification})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/object/classification/{id}", HandlerFunc: s.UpdateClassification})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/object/classification/{id}", HandlerFunc: s.DeleteClassification})
+func (s *Service) initObject(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
+
+	utility.AddHandler(rest.Action{Verb: http.MethodGet, Path: "/object/statistics", Handler: s.GetModelStatistics})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initObjectObjectUnique() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/{bk_obj_id}/unique/action/create", HandlerFunc: s.CreateObjectUnique})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/object/{bk_obj_id}/unique/{id}/action/update", HandlerFunc: s.UpdateObjectUnique})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/object/{bk_obj_id}/unique/{id}/action/delete", HandlerFunc: s.DeleteObjectUnique})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/object/{bk_obj_id}/unique/action/search", HandlerFunc: s.SearchObjectUnique})
+func (s *Service) initIdentifier(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
+
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/identifier/{obj_type}/search", Handler: s.SearchIdentifier})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initObjectGroup() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objectatt/group/new", HandlerFunc: s.CreateObjectGroup})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/objectatt/group/update", HandlerFunc: s.UpdateObjectGroup})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/objectatt/group/groupid/{id}", HandlerFunc: s.DeleteObjectGroup})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/objectatt/group/property", HandlerFunc: s.UpdateObjectAttributeGroup, HandlerParseOriginDataFunc: s.ParseUpdateObjectAttributeGroupInput})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/objectatt/group/owner/{owner_id}/object/{bk_object_id}/propertyids/{property_id}/groupids/{group_id}", HandlerFunc: s.DeleteObjectAttributeGroup})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objectatt/group/property/owner/{owner_id}/object/{bk_obj_id}", HandlerFunc: s.SearchGroupByObject})
+// 全文索引
+func (s *Service) initFullTextSearch(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
+
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/find/full_text", Handler: s.FullTextFind})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initObject() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/batch", HandlerFunc: s.CreateObjectBatch})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object/search/batch", HandlerFunc: s.SearchObjectBatch})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/object", HandlerFunc: s.CreateObject})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objects", HandlerFunc: s.SearchObject})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objects/topo", HandlerFunc: s.SearchObjectTopo})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/object/{id}", HandlerFunc: s.UpdateObject})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/object/{id}", HandlerFunc: s.DeleteObject})
+// 资源池目录
+func (s *Service) initResourceDirectory(web *restful.WebService) {
+	utility := rest.NewRestUtility(rest.Config{
+		ErrorIf:  s.Engine.CCErr,
+		Language: s.Engine.Language,
+	})
 
-}
-func (s *topoService) initPrivilegeGroup() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/privilege/group/{bk_supplier_account}", HandlerFunc: s.CreateUserGroup})
-	s.actions = append(s.actions, action{Method: http.MethodDelete, Path: "/topo/privilege/group/{bk_supplier_account}/{group_id}", HandlerFunc: s.DeleteUserGroup})
-	s.actions = append(s.actions, action{Method: http.MethodPut, Path: "/topo/privilege/group/{bk_supplier_account}/{group_id}", HandlerFunc: s.UpdateUserGroup})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/privilege/group/{bk_supplier_account}/search", HandlerFunc: s.SearchUserGroup})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/create/resource/directory", Handler: s.CreateResourceDirectory})
+	utility.AddHandler(rest.Action{Verb: http.MethodPut, Path: "/update/resource/directory/{bk_module_id}", Handler: s.UpdateResourceDirectory})
+	utility.AddHandler(rest.Action{Verb: http.MethodPost, Path: "/findmany/resource/directory", Handler: s.SearchResourceDirectory})
+	utility.AddHandler(rest.Action{Verb: http.MethodDelete, Path: "/delete/resource/directory/{bk_module_id}", Handler: s.DeleteResourceDirectory})
+
+	utility.AddToRestfulWebService(web)
 }
 
-func (s *topoService) initPrivilegeRole() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/privilege/{bk_supplier_account}/{bk_obj_id}/{bk_property_id}", HandlerFunc: s.CreatePrivilege, HandlerParseOriginDataFunc: s.ParseCreateRolePrivilegeOriginData})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/privilege/{bk_supplier_account}/{bk_obj_id}/{bk_property_id}", HandlerFunc: s.GetPrivilege})
-}
+func (s *Service) initService(web *restful.WebService) {
+	s.initAssociation(web)
+	s.initAuditLog(web)
+	s.initBusiness(web)
+	s.initInst(web)
+	s.initModule(web)
+	s.initSet(web)
+	s.initObject(web)
+	s.initObjectAttribute(web)
+	s.initObjectGroup(web)
+	s.initIdentifier(web)
 
-func (s *topoService) initPrivilege() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/topo/privilege/group/detail/{bk_supplier_account}/{group_id}", HandlerFunc: s.UpdateUserGroupPrivi})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/privilege/group/detail/{bk_supplier_account}/{group_id}", HandlerFunc: s.GetUserGroupPrivi})
-	s.actions = append(s.actions, action{Method: http.MethodGet, Path: "/topo/privilege/user/detail/{bk_supplier_account}/{user_name}", HandlerFunc: s.GetUserPrivi})
-}
+	s.initBusinessObject(web)
+	s.initBusinessClassification(web)
+	s.initBusinessObjectAttribute(web)
+	s.initBusinessObjectUnique(web)
+	s.initBusinessObjectAttrGroup(web)
+	s.initBusinessAssociation(web)
+	s.initBusinessGraphics(web)
+	s.initBusinessInst(web)
 
-func (s *topoService) initGraphics() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objects/topographics/scope_type/{scope_type}/scope_id/{scope_id}/action/search", HandlerFunc: s.SelectObjectTopoGraphics})
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/objects/topographics/scope_type/{scope_type}/scope_id/{scope_id}/action/update", HandlerFunc: s.UpdateObjectTopoGraphics, HandlerParseOriginDataFunc: s.ParseOriginGraphicsUpdateInput})
-}
-func (s *topoService) initIdentifier() {
-	s.actions = append(s.actions, action{Method: http.MethodPost, Path: "/identifier/{obj_type}/search", HandlerFunc: s.SearchIdentifier, HandlerParseOriginDataFunc: s.ParseSearchIdentifierOriginData})
-}
+	s.initFullTextSearch(web)
+	s.initSetTemplate(web)
+	s.initInternalTask(web)
 
-func (s *topoService) initService() {
-	s.initHealth()
-	s.initAssociation()
-	s.initAuditLog()
-	s.initCompatiblev2()
-	s.initBusiness()
-	s.initInst()
-	s.initModule()
-	s.initSet()
-	s.initObject()
-	s.initObjectAttribute()
-	s.initObjectClassification()
-	s.initObjectGroup()
-	s.initPrivilegeGroup()
-	s.initPrivilegeRole()
-	s.initPrivilege()
-	s.initGraphics()
-	s.initIdentifier()
-	s.initObjectObjectUnique()
-
-	s.initBusinessObject()
-	s.initBusinessClassification()
-	s.initBusinessObjectAttribute()
-	s.initBusinessObjectUnique()
-	s.initBusinessObjectAttrGroup()
-	s.initBusinessAssociation()
-	s.initBusinessGraphics()
-	s.initBusinessInst()
-
+	s.initResourceDirectory(web)
 }

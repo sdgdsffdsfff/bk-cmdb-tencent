@@ -1,64 +1,64 @@
 <template>
-    <bk-dropdown-menu trigger="click" :disabled="disabled">
-        <bk-button class="clipboard-trigger" type="default" slot="dropdown-trigger"
-            :disabled="disabled">
-            {{$t('Common["复制"]')}}
-            <i class="bk-icon icon-angle-down"></i>
-        </bk-button>
-        <ul class="clipboard-list" slot="dropdown-content">
-            <li v-for="(item, index) in list"
-                class="clipboard-item"
-                :key="index"
-                @click="handleClick(item)">
-                {{item[labelKey]}}
-            </li>
-        </ul>
-    </bk-dropdown-menu>
+  <bk-dropdown-menu trigger="click" :disabled="disabled" font-size="medium">
+    <bk-button class="clipboard-trigger" theme="default" slot="dropdown-trigger"
+      :disabled="disabled">
+      {{$t('复制')}}
+      <i class="bk-icon icon-angle-down"></i>
+    </bk-button>
+    <ul class="clipboard-list" slot="dropdown-content">
+      <li v-for="(item, index) in list"
+        class="clipboard-item"
+        :key="index"
+        @click="handleClick(item)">
+        {{item[labelKey]}}
+      </li>
+    </ul>
+  </bk-dropdown-menu>
 </template>
 
 <script>
-    export default {
-        name: 'cmdb-clipboard-selector',
-        props: {
-            disabled: {
-                type: Boolean,
-                default: false
-            },
-            list: {
-                type: Array,
-                default () {
-                    return []
-                }
-            },
-            idKey: {
-                type: String,
-                default: 'id'
-            },
-            labelKey: {
-                type: String,
-                default: 'name'
-            }
-        },
-        methods: {
-            handleClick (item) {
-                this.$emit('on-copy', item)
-            }
+  export default {
+    name: 'cmdb-clipboard-selector',
+    props: {
+      disabled: {
+        type: Boolean,
+        default: false
+      },
+      list: {
+        type: Array,
+        default() {
+          return []
         }
+      },
+      idKey: {
+        type: String,
+        default: 'id'
+      },
+      labelKey: {
+        type: String,
+        default: 'name'
+      }
+    },
+    methods: {
+      handleClick(item) {
+        this.$emit('on-copy', item)
+      }
     }
+  }
 </script>
 
 <style lang="scss" scoped>
     .clipboard-trigger{
         padding: 0 16px;
         .icon-angle-down {
-            font-size: 12px;
-            top: 0;
+            font-size: 20px;
+            margin: 0 -4px;
         }
     }
     .clipboard-list{
         width: 100%;
         font-size: 14px;
-        line-height: 40px;
+        line-height: 32px;
         max-height: 160px;
         @include scrollbar-y;
         &::-webkit-scrollbar{

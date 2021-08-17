@@ -16,16 +16,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"reflect"
-	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync/atomic"
-	"time"
 
 	"configcenter/src/common"
-	"configcenter/src/common/blog"
-	"configcenter/src/storage/dal"
+	"configcenter/src/common/errors"
 
-	restful "github.com/emicklei/go-restful"
+	"github.com/emicklei/go-restful"
+	"github.com/gin-gonic/gin"
 	"github.com/rs/xid"
 )
 
@@ -42,27 +41,6 @@ func GetLanguage(header http.Header) string {
 	return header.Get(common.BKHTTPLanguage)
 }
 
-// GetActionLanguage returns language form hender
-func GetActionLanguage(req *restful.Request) string {
-	language := req.HeaderParameter(common.BKHTTPLanguage)
-	if "" == language {
-		language = "zh-cn"
-	}
-	return language
-}
-
-// GetActionUser returns user form hender
-func GetActionUser(req *restful.Request) string {
-	user := req.HeaderParameter(common.BKHTTPHeaderUser)
-	return user
-}
-
-// GetActionOnwerID returns owner_uin form hender
-func GetActionOnwerID(req *restful.Request) string {
-	ownerID := req.HeaderParameter(common.BKHTTPOwnerID)
-	return ownerID
-}
-
 func GetUser(header http.Header) string {
 	return header.Get(common.BKHTTPHeaderUser)
 }
@@ -71,82 +49,78 @@ func GetOwnerID(header http.Header) string {
 	return header.Get(common.BKHTTPOwnerID)
 }
 
-func GetOwnerIDAndUser(header http.Header) (string, string) {
-	return header.Get(common.BKHTTPOwnerID), header.Get(common.BKHTTPHeaderUser)
-}
-
-// SetActionOwerIDAndAccount set supplier id and account in head
-func SetActionOwerIDAndAccount(req *restful.Request) {
+// set supplier id and account in head
+func SetOwnerIDAndAccount(req *restful.Request) {
 	owner := req.Request.Header.Get(common.BKHTTPOwner)
 	if "" != owner {
 		req.Request.Header.Set(common.BKHTTPOwnerID, owner)
 	}
-
 }
 
-// GetActionOnwerIDAndUser returns owner_uin and user form hender
-func GetActionOnwerIDAndUser(req *restful.Request) (string, string) {
-	user := GetActionUser(req)
-	ownerID := GetActionOnwerID(req)
-
-	return ownerID, user
-}
-
-// GetActionLanguageByHTTPHeader return language from http header
-func GetActionLanguageByHTTPHeader(header http.Header) string {
-	language := header.Get(common.BKHTTPLanguage)
-	if "" == language {
-		return "zh-cn"
-	}
-	return language
-}
-
-// GetActionOnwerIDByHTTPHeader return owner from http header
-func GetActionOnwerIDByHTTPHeader(header http.Header) string {
-	ownerID := header.Get(common.BKHTTPOwnerID)
-	return ownerID
-}
-
-// GetHTTPCCRequestID return configcenter request id from http header
+// GetHTTPCCRequestID return config center request id from http header
 func GetHTTPCCRequestID(header http.Header) string {
 	rid := header.Get(common.BKHTTPCCRequestID)
 	return rid
 }
 
-// GetSupplierID return supplier_id from http header
-func GetSupplierID(header http.Header) (int64, error) {
-	return GetInt64ByInterface(header.Get(common.BKHTTPSupplierID))
-}
-
-// IsExistSupplierID check supplier_id  exist from http header
-func IsExistSupplierID(header http.Header) bool {
-	if "" == header.Get(common.BKHTTPSupplierID) {
-		return false
+func ExtractRequestIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
 	}
-	return true
-}
-
-// GetHTTPCCTransaction return configcenter request id from http header
-func GetHTTPCCTransaction(header http.Header) string {
-	rid := header.Get(common.BKHTTPCCTransactionID)
-	return rid
-}
-
-// GetDBContext returns a new context that contains JoinOption
-func GetDBContext(parent context.Context, header http.Header) context.Context {
-	return context.WithValue(parent, common.CCContextKeyJoinOption, dal.JoinOption{
-		RequestID: header.Get(common.BKHTTPCCRequestID),
-		TxnID:     header.Get(common.BKHTTPCCTransactionID),
-	})
-}
-
-// IsNil returns whether value is nil value, including map[string]interface{}{nil}, *Struct{nil}
-func IsNil(value interface{}) bool {
-	rflValue := reflect.ValueOf(value)
-	if rflValue.IsValid() {
-		return rflValue.IsNil()
+	rid := ctx.Value(common.ContextRequestIDField)
+	ridValue, ok := rid.(string)
+	if ok == true {
+		return ridValue
 	}
-	return true
+	return ""
+}
+
+func ExtractOwnerFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	owner := ctx.Value(common.ContextRequestOwnerField)
+	ownerValue, ok := owner.(string)
+	if ok == true {
+		return ownerValue
+	}
+	return ""
+}
+
+func NewContextFromGinContext(c *gin.Context) context.Context {
+	return NewContextFromHTTPHeader(c.Request.Header)
+}
+
+func NewContextFromHTTPHeader(header http.Header) context.Context {
+	rid := GetHTTPCCRequestID(header)
+	user := GetUser(header)
+	owner := GetOwnerID(header)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, common.ContextRequestIDField, rid)
+	ctx = context.WithValue(ctx, common.ContextRequestUserField, user)
+	ctx = context.WithValue(ctx, common.ContextRequestOwnerField, owner)
+	return ctx
+}
+
+func BuildHeader(user string, supplierAccount string) http.Header {
+	header := make(http.Header)
+	header.Add(common.BKHTTPOwnerID, supplierAccount)
+	header.Add(common.BKHTTPHeaderUser, user)
+	header.Add(common.BKHTTPCCRequestID, GenerateRID())
+	header.Add("Content-Type", "application/json")
+	return header
+}
+
+func ExtractRequestUserFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	user := ctx.Value(common.ContextRequestUserField)
+	userValue, ok := user.(string)
+	if ok == true {
+		return userValue
+	}
+	return ""
 }
 
 type AtomicBool int32
@@ -183,47 +157,103 @@ func (b *AtomicBool) SetTo(yes bool) {
 	}
 }
 
+type IntSlice []int
+
+func (p IntSlice) Len() int           { return len(p) }
+func (p IntSlice) Less(i, j int) bool { return p[i] < p[j] }
+func (p IntSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+
 type Int64Slice []int64
 
 func (p Int64Slice) Len() int           { return len(p) }
 func (p Int64Slice) Less(i, j int) bool { return p[i] < p[j] }
 func (p Int64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
-func Ptrue() *bool {
-	tmp := true
-	return &tmp
-}
-func Pfalse() *bool {
-	tmp := false
-	return &tmp
-}
-
-// RunForever will run the function forever and rerun the f function if any panic happened
-func RunForever(name string, f func() error) {
-	for {
-		if err := runNoPanic(f); err != nil {
-			blog.Errorf("[%s] return %v, retry 3s later", err)
-			time.Sleep(time.Second * 3)
-		}
-	}
-}
-
-func runNoPanic(f func() error) (err error) {
-	defer func() {
-		if err != nil {
-			return
-		}
-		if syserr := recover(); err != nil {
-			err = fmt.Errorf("panic with error: %v, stack: \n%s", syserr, debug.Stack())
-		}
-	}()
-
-	err = f()
-	return err
-}
-
 func GenerateRID() string {
 	unused := "0000"
 	id := xid.New()
 	return fmt.Sprintf("cc%s%s", unused, id.String())
+}
+
+// Int64Join []int64 to string
+func Int64Join(data []int64, separator string) string {
+	var ret string
+	for _, item := range data {
+		ret += strconv.FormatInt(item, 10) + separator
+	}
+	return strings.Trim(ret, separator)
+}
+
+// BuildMongoField build mongodb sub item field key
+func BuildMongoField(key ...string) string {
+	return strings.Join(key, ".")
+}
+
+// BuildMongoSyncItemField build mongodb sub item synchronize field key
+func BuildMongoSyncItemField(key string) string {
+	return BuildMongoField(common.MetadataField, common.MetaDataSynchronizeField, key)
+}
+
+func GetDefaultCCError(header http.Header) errors.DefaultCCErrorIf {
+	globalCCError := errors.GetGlobalCCError()
+	if globalCCError == nil {
+		return nil
+	}
+	language := GetLanguage(header)
+	return globalCCError.CreateDefaultCCErrorIf(language)
+}
+
+func CCHeader(header http.Header) http.Header {
+	newHeader := make(http.Header, 0)
+	newHeader.Add(common.BKHTTPCCRequestID, header.Get(common.BKHTTPCCRequestID))
+	newHeader.Add(common.BKHTTPCookieLanugageKey, header.Get(common.BKHTTPCookieLanugageKey))
+	newHeader.Add(common.BKHTTPHeaderUser, header.Get(common.BKHTTPHeaderUser))
+	newHeader.Add(common.BKHTTPLanguage, header.Get(common.BKHTTPLanguage))
+	newHeader.Add(common.BKHTTPOwner, header.Get(common.BKHTTPOwner))
+	newHeader.Add(common.BKHTTPOwnerID, header.Get(common.BKHTTPOwnerID))
+	newHeader.Add(common.BKHTTPRequestAppCode, header.Get(common.BKHTTPRequestAppCode))
+	newHeader.Add(common.BKHTTPRequestRealIP, header.Get(common.BKHTTPRequestRealIP))
+	newHeader.Add(common.BKHTTPReadReference, header.Get(common.BKHTTPReadReference))
+
+	return newHeader
+}
+
+// SetHTTPReadPreference  再header 头中设置mongodb read preference， 这个是给调用子流程使用
+func SetHTTPReadPreference(header http.Header, mode common.ReadPreferenceMode) http.Header {
+	header.Set(common.BKHTTPReadReference, mode.String())
+	return header
+}
+
+// SetDBReadPreference  再context 设置设置mongodb read preference，给dal 使用
+func SetDBReadPreference(ctx context.Context, mode common.ReadPreferenceMode) context.Context {
+	ctx = context.WithValue(ctx, common.BKHTTPReadReference, mode.String())
+	return ctx
+}
+
+// SetReadPreference  再context， header 设置设置mongodb read preference，给dal 使用
+func SetReadPreference(ctx context.Context, header http.Header, mode common.ReadPreferenceMode) (context.Context, http.Header) {
+	ctx = SetDBReadPreference(ctx, mode)
+	header = SetHTTPReadPreference(header, mode)
+	return ctx, header
+}
+
+// GetDBReadPreference
+func GetDBReadPreference(ctx context.Context) common.ReadPreferenceMode {
+	val := ctx.Value(common.BKHTTPReadReference)
+	if val != nil {
+		mode, ok := val.(string)
+		if ok {
+			return common.ReadPreferenceMode(mode)
+		}
+	}
+	return common.NilMode
+}
+
+// GetHTTPReadPreference
+func GetHTTPReadPreference(header http.Header) common.ReadPreferenceMode {
+	mode := header.Get(common.BKHTTPReadReference)
+	if mode == "" {
+		return common.NilMode
+	}
+	return common.ReadPreferenceMode(mode)
 }

@@ -26,40 +26,61 @@ import (
 	cc "configcenter/src/common/backbone/configcenter"
 	"configcenter/src/common/backbone/service_mange/zk"
 	"configcenter/src/common/blog"
+	crd "configcenter/src/common/confregdiscover"
 	"configcenter/src/common/errors"
 	"configcenter/src/common/language"
+	"configcenter/src/common/metrics"
 	"configcenter/src/common/types"
+	"configcenter/src/storage/dal/mongo"
+	"configcenter/src/storage/dal/redis"
+	"configcenter/src/thirdparty/monitor"
+
+	"github.com/rs/xid"
 )
+
+// connect svcManager retry connect time
+const maxRetry = 200
 
 // BackboneParameter Used to constrain different services to ensure
 // consistency of service startup capabilities
 type BackboneParameter struct {
 	// ConfigUpdate handle process config change
 	ConfigUpdate cc.ProcHandlerFunc
+	ExtraUpdate  cc.ProcHandlerFunc
 
-	// servvice component addr
+	// service component addr
 	Regdiscv string
 	// config path
 	ConfigPath string
-	// http server paramster
+	// http server parameter
 	SrvInfo *types.ServerInfo
 }
 
-func newManageSrvClient(ctx context.Context, manageSrvAddr string) (*zk.ZkClient, error) {
-	client := zk.NewZkClient(manageSrvAddr, 5*time.Second)
-	if err := client.Start(); err != nil {
-		return nil, fmt.Errorf("connect regdiscv [%s] failed: %v", manageSrvAddr, err)
-	}
-	if err := client.Ping(); err != nil {
-		return nil, fmt.Errorf("connect regdiscv [%s] failed: %v", manageSrvAddr, err)
+func newSvcManagerClient(ctx context.Context, svcManagerAddr string) (*zk.ZkClient, error) {
+	var err error
+	for retry := 0; retry < maxRetry; retry++ {
+		client := zk.NewZkClient(svcManagerAddr, 40*time.Second)
+		if err = client.Start(); err != nil {
+			blog.Errorf("connect regdiscv [%s] failed: %v", svcManagerAddr, err)
+			time.Sleep(time.Second * 2)
+			continue
+		}
+
+		if err = client.Ping(); err != nil {
+			blog.Errorf("connect regdiscv [%s] failed: %v", svcManagerAddr, err)
+			time.Sleep(time.Second * 2)
+			continue
+		}
+
+		return client, nil
 	}
 
-	return client, nil
+	return nil, err
 }
 
-func newConfig(ctx context.Context, srvInfo *types.ServerInfo, discovery discovery.DiscoveryInterface, apiMachinerConfig *util.APIMachineryConfig) (*Config, error) {
+func newConfig(ctx context.Context, srvInfo *types.ServerInfo, discovery discovery.DiscoveryInterface, apiMachineryConfig *util.APIMachineryConfig) (*Config, error) {
 
-	machinery, err := apimachinery.NewApiMachinery(apiMachinerConfig, discovery)
+	machinery, err := apimachinery.NewApiMachinery(apiMachineryConfig, discovery)
 	if err != nil {
 		return nil, fmt.Errorf("new api machinery failed, err: %v", err)
 	}
@@ -74,7 +95,7 @@ func newConfig(ctx context.Context, srvInfo *types.ServerInfo, discovery discove
 	return bonC, nil
 }
 
-func parameterValid(input *BackboneParameter) error {
+func validateParameter(input *BackboneParameter) error {
 	if input.Regdiscv == "" {
 		return fmt.Errorf("regdiscv can not be emtpy")
 	}
@@ -84,28 +105,36 @@ func parameterValid(input *BackboneParameter) error {
 	if input.SrvInfo.Port <= 0 || input.SrvInfo.Port > 65535 {
 		return fmt.Errorf("addrport port must be 1-65535")
 	}
-
-	if input.ConfigUpdate == nil {
+	if input.ConfigUpdate == nil && input.ExtraUpdate == nil {
 		return fmt.Errorf("service config change funcation can not be emtpy")
 	}
-
+	// to prevent other components which doesn't set it from failing
+	if input.SrvInfo.RegisterIP == "" {
+		input.SrvInfo.RegisterIP = input.SrvInfo.IP
+	}
+	if input.SrvInfo.UUID == "" {
+		input.SrvInfo.UUID = xid.New().String()
+	}
 	return nil
 }
 
 func NewBackbone(ctx context.Context, input *BackboneParameter) (*Engine, error) {
-	if err := parameterValid(input); err != nil {
+	if err := validateParameter(input); err != nil {
 		return nil, err
 	}
+
+	metricService := metrics.NewService(metrics.Config{ProcessName: common.GetIdentification(), ProcessInstance: input.SrvInfo.Instance()})
+
 	common.SetServerInfo(input.SrvInfo)
-	client, err := newManageSrvClient(ctx, input.Regdiscv)
+	client, err := newSvcManagerClient(ctx, input.Regdiscv)
 	if err != nil {
 		return nil, fmt.Errorf("connect regdiscv [%s] failed: %v", input.Regdiscv, err)
 	}
-	discoveryInterface, err := discovery.NewDiscoveryInterface(client)
+	serviceDiscovery, err := discovery.NewServiceDiscovery(client)
 	if err != nil {
 		return nil, fmt.Errorf("connect regdiscv [%s] failed: %v", input.Regdiscv, err)
 	}
-	disc, err := NewServcieDiscovery(client)
+	disc, err := NewServiceRegister(client)
 	if err != nil {
 		return nil, fmt.Errorf("new service discover failed, err:%v", err)
 	}
@@ -115,7 +144,7 @@ func NewBackbone(ctx context.Context, input *BackboneParameter) (*Engine, error)
 		Burst:     2000,
 		TLSConfig: nil,
 	}
-	c, err := newConfig(ctx, input.SrvInfo, discoveryInterface, apiMachineryConfig)
+	c, err := newConfig(ctx, input.SrvInfo, serviceDiscovery, apiMachineryConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -124,68 +153,99 @@ func NewBackbone(ctx context.Context, input *BackboneParameter) (*Engine, error)
 		return nil, fmt.Errorf("new engine failed, err: %v", err)
 	}
 	engine.client = client
-	engine.apiMachinerConfig = apiMachineryConfig
-	engine.discovery = discoveryInterface
-	engine.ServiceManageInterface = discoveryInterface
+	engine.apiMachineryConfig = apiMachineryConfig
+	engine.discovery = serviceDiscovery
+	engine.ServiceManageInterface = serviceDiscovery
 	engine.srvInfo = input.SrvInfo
+	engine.metric = metricService
 
 	handler := &cc.CCHandler{
 		OnProcessUpdate:  input.ConfigUpdate,
+		OnExtraUpdate:    input.ExtraUpdate,
 		OnLanguageUpdate: engine.onLanguageUpdate,
 		OnErrorUpdate:    engine.onErrorUpdate,
+		OnMongodbUpdate:  engine.onMongodbUpdate,
+		OnRedisUpdate:    engine.onRedisUpdate,
 	}
 
-	err = cc.NewConfigCenter(ctx, client, common.GetIdentification(), input.ConfigPath, handler)
+	// add default configcenter
+	zkdisc := crd.NewZkRegDiscover(client)
+	configCenter := &cc.ConfigCenter{
+		Type:               common.BKDefaultConfigCenter,
+		ConfigCenterDetail: zkdisc,
+	}
+	cc.AddConfigCenter(configCenter)
+
+	// get the real configuration center.
+	curentConfigCenter := cc.CurrentConfigCenter()
+
+	err = cc.NewConfigCenter(ctx, curentConfigCenter, input.ConfigPath, handler)
 	if err != nil {
 		return nil, fmt.Errorf("new config center failed, err: %v", err)
+	}
+
+	err = handleNotice(ctx, client.Client(), input.SrvInfo.Instance())
+	if err != nil {
+		return nil, fmt.Errorf("handle notice failed, err: %v", err)
+	}
+
+	if err := monitor.InitMonitor(); err != nil {
+		return nil, fmt.Errorf("init monitor failed, err: %v", err)
 	}
 
 	return engine, nil
 }
 
-func StartServer(ctx context.Context, e *Engine, HTTPHandler http.Handler) error {
+func StartServer(ctx context.Context, cancel context.CancelFunc, e *Engine, HTTPHandler http.Handler, pprofEnabled bool) error {
 	e.server = Server{
-		ListenAddr: e.srvInfo.IP,
-		ListenPort: e.srvInfo.Port,
-		Handler:    HTTPHandler,
-		TLS:        TLSConfig{},
+		ListenAddr:   e.srvInfo.IP,
+		ListenPort:   e.srvInfo.Port,
+		Handler:      e.Metric().HTTPMiddleware(HTTPHandler),
+		TLS:          TLSConfig{},
+		PProfEnabled: pprofEnabled,
 	}
 
-	if err := ListenServer(e.server); err != nil {
+	if err := ListenAndServe(e.server, e.SvcDisc, cancel); err != nil {
 		return err
 	}
-	return nil
+
+	// wait for a while to see if ListenAndServe in goroutine is successful
+	// to avoid registering an invalid server address on zk
+	time.Sleep(time.Second)
+
+	return e.SvcDisc.Register(e.RegisterPath, *e.srvInfo)
 }
 
-func New(c *Config, disc ServiceDiscoverInterface) (*Engine, error) {
-	if err := disc.Register(c.RegisterPath, c.RegisterInfo); err != nil {
-		return nil, err
-	}
-
+func New(c *Config, disc ServiceRegisterInterface) (*Engine, error) {
 	return &Engine{
-		ServerInfo: c.RegisterInfo,
-		CoreAPI:    c.CoreAPI,
-		SvcDisc:    disc,
-		Language:   language.NewFromCtx(language.EmptyLanguageSetting),
-		CCErr:      errors.NewFromCtx(errors.EmptyErrorsSetting),
-		CCCtx:      newCCContext(),
+		RegisterPath: c.RegisterPath,
+		CoreAPI:      c.CoreAPI,
+		SvcDisc:      disc,
+		Language:     language.NewFromCtx(language.EmptyLanguageSetting),
+		CCErr:        errors.NewFromCtx(errors.EmptyErrorsSetting),
+		CCCtx:        newCCContext(),
 	}, nil
 }
 
 type Engine struct {
-	client *zk.ZkClient
-	sync.Mutex
-	ServerInfo             types.ServerInfo
-	CoreAPI                apimachinery.ClientSetInterface
-	SvcDisc                ServiceDiscoverInterface
-	Language               language.CCLanguageIf
-	CCErr                  errors.CCErrorIf
-	CCCtx                  CCContextInterface
+	CoreAPI            apimachinery.ClientSetInterface
+	apiMachineryConfig *util.APIMachineryConfig
+
+	client                 *zk.ZkClient
 	ServiceManageInterface discovery.ServiceManageInterface
-	apiMachinerConfig      *util.APIMachineryConfig
+	SvcDisc                ServiceRegisterInterface
 	discovery              discovery.DiscoveryInterface
-	server                 Server
-	srvInfo                *types.ServerInfo
+	metric                 *metrics.Service
+
+	sync.Mutex
+
+	RegisterPath string
+	server       Server
+	srvInfo      *types.ServerInfo
+
+	Language language.CCLanguageIf
+	CCErr    errors.CCErrorIf
+	CCCtx    CCContextInterface
 }
 
 func (e *Engine) Discovery() discovery.DiscoveryInterface {
@@ -193,11 +253,15 @@ func (e *Engine) Discovery() discovery.DiscoveryInterface {
 }
 
 func (e *Engine) ApiMachineryConfig() *util.APIMachineryConfig {
-	return e.apiMachinerConfig
+	return e.apiMachineryConfig
 }
 
 func (e *Engine) ServiceManageClient() *zk.ZkClient {
 	return e.client
+}
+
+func (e *Engine) Metric() *metrics.Service {
+	return e.metric
 }
 
 func (e *Engine) onLanguageUpdate(previous, current map[string]language.LanguageMap) {
@@ -224,6 +288,45 @@ func (e *Engine) onErrorUpdate(previous, current map[string]errors.ErrorCode) {
 	blog.V(3).Infof("load new error config success.")
 }
 
+func (e *Engine) onMongodbUpdate(previous, current cc.ProcessConfig) {
+	e.Lock()
+	defer e.Unlock()
+	if err := cc.SetMongodbFromByte(current.ConfigData); err != nil {
+		blog.Errorf("parse mongo config failed, err: %s, data: %s", err.Error(), string(current.ConfigData))
+	}
+}
+
+func (e *Engine) onRedisUpdate(previous, current cc.ProcessConfig) {
+	e.Lock()
+	defer e.Unlock()
+	if err := cc.SetRedisFromByte(current.ConfigData); err != nil {
+		blog.Errorf("parse redis config failed, err: %s, data: %s", err.Error(), string(current.ConfigData))
+	}
+}
+
 func (e *Engine) Ping() error {
 	return e.SvcDisc.Ping()
+}
+
+func (e *Engine) WithRedis(prefixes ...string) (redis.Config, error) {
+	// use default prefix if no prefix is specified, or use the first prefix
+	var prefix string
+	if len(prefixes) == 0 {
+		prefix = "redis"
+	} else {
+		prefix = prefixes[0]
+	}
+
+	return cc.Redis(prefix)
+}
+
+func (e *Engine) WithMongo(prefixes ...string) (mongo.Config, error) {
+	var prefix string
+	if len(prefixes) == 0 {
+		prefix = "mongodb"
+	} else {
+		prefix = prefixes[0]
+	}
+
+	return cc.Mongo(prefix)
 }

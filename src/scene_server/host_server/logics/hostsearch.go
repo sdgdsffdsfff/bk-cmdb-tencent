@@ -15,19 +15,22 @@ package logics
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
 	"configcenter/src/common/errors"
+	"configcenter/src/common/http/rest"
 	"configcenter/src/common/mapstr"
 	"configcenter/src/common/metadata"
 	hostParse "configcenter/src/common/paraparse"
 	"configcenter/src/common/util"
 )
 
-func (lgc *Logics) SearchHost(ctx context.Context, data *metadata.HostCommonSearch, isDetail bool) (*metadata.SearchHost, error) {
-	searchHostInst := NewSearchHost(ctx, lgc, data)
+func (lgc *Logics) SearchHost(kit *rest.Kit, data *metadata.HostCommonSearch, isDetail bool) (*metadata.SearchHost, error) {
+	searchHostInst := NewSearchHost(kit, lgc, data)
 	searchHostInst.ParseCondition()
 	retHostInfo := &metadata.SearchHost{
 		Info: make([]mapstr.MapStr, 0),
@@ -88,6 +91,7 @@ type hostInfoStruct struct {
 }
 
 type searchHost struct {
+	kit             *rest.Kit
 	lgc             *Logics
 	pheader         http.Header
 	hostSearchParam *metadata.HostCommonSearch
@@ -101,6 +105,11 @@ type searchHost struct {
 	hostInfoArr  []hostInfoStruct // int64 is hostID
 	cacheInfoMap searchHostInfoMapCache
 	totalHostCnt int
+
+	paged bool
+
+	searchedHostIDs []int64
+	searchCloudIDs  []int64
 
 	ccErr errors.DefaultCCErrorIf
 	ccRid string
@@ -126,15 +135,16 @@ type searchHostInterface interface {
 	FillTopologyData() ([]mapstr.MapStr, int, errors.CCError)
 }
 
-func NewSearchHost(ctx context.Context, lgc *Logics, hostSearchParam *metadata.HostCommonSearch) searchHostInterface {
+func NewSearchHost(kit *rest.Kit, lgc *Logics, hostSearchParam *metadata.HostCommonSearch) searchHostInterface {
 	sh := &searchHost{
+		kit:             kit,
 		lgc:             lgc,
-		pheader:         lgc.header,
+		pheader:         kit.Header,
 		hostSearchParam: hostSearchParam,
 		idArr:           searchHostIDArr{},
-		ccRid:           lgc.rid,
-		ccErr:           lgc.ccErr,
-		ctx:             ctx,
+		ccRid:           kit.Rid,
+		ccErr:           kit.CCError,
+		ctx:             kit.Ctx,
 	}
 
 	sh.conds.objectCondMap = make(map[string][]metadata.ConditionItem)
@@ -164,6 +174,7 @@ func (sh *searchHost) ParseCondition() {
 			sh.conds.objectCondMap[object.ObjectID] = object.Condition
 		}
 	}
+	sh.hostSearchParam.Condition = nil
 
 	sh.tryParseAppID()
 
@@ -196,13 +207,12 @@ func (sh *searchHost) FillTopologyData() ([]mapstr.MapStr, int, errors.CCError) 
 		return nil, 0, nil
 	}
 
-	hostIDArr := make([]int64, 0)
-	queryCond := make(map[string][]int64)
-	for _, hostInfoItem := range sh.hostInfoArr {
-		hostIDArr = append(hostIDArr, hostInfoItem.hostID)
+	queryCond := metadata.HostModuleRelationRequest{
+		HostIDArr: sh.searchedHostIDs,
+		Fields:    []string{common.BKAppIDField, common.BKSetIDField, common.BKModuleIDField, common.BKHostIDField},
 	}
-	queryCond[common.BKHostIDField] = hostIDArr
-	mhconfig, err := sh.lgc.GetConfigByCond(sh.ctx, queryCond)
+	sh.searchedHostIDs = nil
+	mhconfig, err := sh.lgc.GetHostRelations(sh.kit, queryCond)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -210,37 +220,35 @@ func (sh *searchHost) FillTopologyData() ([]mapstr.MapStr, int, errors.CCError) 
 	setIDArr := make([]int64, 0)
 	moduleIDArr := make([]int64, 0)
 
-	type idArrStruct []int64
 	hostAppSetModuleConfig := make(map[int64]map[int64]*appLevelInfo, 0)
 
-	blog.V(5).Infof("get modulehostconfig map:%v", mhconfig)
+	blog.V(5).Infof("get modulehostconfig map:%v, rid:%s", mhconfig, sh.ccRid)
 	for _, mh := range mhconfig {
-		hostID := mh[common.BKHostIDField]
-		hostAppInfoLevelInst, ok := hostAppSetModuleConfig[hostID]
+		hostAppInfoLevelInst, ok := hostAppSetModuleConfig[mh.HostID]
 		if !ok {
 			hostAppInfoLevelInst = make(map[int64]*appLevelInfo, 0)
-			hostAppSetModuleConfig[hostID] = hostAppInfoLevelInst
+			hostAppSetModuleConfig[mh.HostID] = hostAppInfoLevelInst
 		}
 
-		appInfoLevelInst, ok := hostAppInfoLevelInst[mh[common.BKAppIDField]]
+		appInfoLevelInst, ok := hostAppInfoLevelInst[mh.AppID]
 		if !ok {
 			appInfoLevelInst = &appLevelInfo{
 				setInfoMap: make(map[int64]*setLevelInfo, 0),
 			}
-			hostAppInfoLevelInst[mh[common.BKAppIDField]] = appInfoLevelInst
+			hostAppInfoLevelInst[mh.AppID] = appInfoLevelInst
 		}
-		setInfoLevleInst, ok := appInfoLevelInst.setInfoMap[mh[common.BKSetIDField]]
+		setInfoLevleInst, ok := appInfoLevelInst.setInfoMap[mh.SetID]
 		if !ok {
 			setInfoLevleInst = &setLevelInfo{
 				moduleInfoMap: make(map[int64]int64, 0),
 			}
-			appInfoLevelInst.setInfoMap[mh[common.BKSetIDField]] = setInfoLevleInst
+			appInfoLevelInst.setInfoMap[mh.SetID] = setInfoLevleInst
 		}
-		setInfoLevleInst.moduleInfoMap[mh[common.BKModuleIDField]] = mh[common.BKModuleIDField]
+		setInfoLevleInst.moduleInfoMap[mh.ModuleID] = mh.ModuleID
 
-		appIDArr = append(appIDArr, mh[common.BKAppIDField])
-		setIDArr = append(setIDArr, mh[common.BKSetIDField])
-		moduleIDArr = append(moduleIDArr, mh[common.BKModuleIDField])
+		appIDArr = append(appIDArr, mh.AppID)
+		setIDArr = append(setIDArr, mh.SetID)
+		moduleIDArr = append(moduleIDArr, mh.ModuleID)
 	}
 	appInfoMap, err := sh.fetchTopoAppCacheInfo(appIDArr)
 	if err != nil {
@@ -305,24 +313,11 @@ func (sh *searchHost) fillHostCloudInfo(hostInfo, searchHostItem mapstr.MapStr) 
 }
 
 func (sh *searchHost) fetchHostCloudCacheInfo() (map[int64]*InstNameAsst, errors.CCError) {
-	cloudIDMap := make(map[int64]bool, 0)
-	for _, hostInfoItem := range sh.hostInfoArr {
 
-		cloudID, err := hostInfoItem.hostInfo.Int64(common.BKCloudIDField)
-		if err != nil {
-			blog.Warnf("hostSearch not found  cloud id in hsot, hostInfo:%d, rid:%s", hostInfoItem.hostInfo, sh.ccRid)
-			continue
-		}
-		cloudIDMap[cloudID] = true
-	}
-	var cloudIDArr []int64
-	for cloudID := range cloudIDMap {
-		cloudIDArr = append(cloudIDArr, cloudID)
-	}
 	queryInput := &metadata.QueryCondition{}
 	queryInput.Condition = mapstr.MapStr{
 		common.BKCloudIDField: mapstr.MapStr{
-			common.BKDBIN: cloudIDArr,
+			common.BKDBIN: sh.searchCloudIDs,
 		},
 	}
 	result, err := sh.lgc.CoreAPI.CoreService().Instance().ReadInstance(sh.ctx, sh.pheader, common.BKInnerObjIDPlat, queryInput)
@@ -356,7 +351,7 @@ func (sh *searchHost) convInstInfoToAssociateInfo(instIDKey, instNameKey, objID 
 		}
 		instID, err := instInfo.Int64(instIDKey)
 		if err != nil {
-			return nil, sh.ccErr.Errorf(common.CCErrCommInstFieldConvFail, objID, instIDKey, "int", err.Error())
+			return nil, sh.ccErr.Errorf(common.CCErrCommInstFieldConvertFail, objID, instIDKey, "int", err.Error())
 		}
 		asstInst.ID = strconv.FormatInt(instID, 10)
 		asstInst.ObjectID = instID
@@ -380,7 +375,7 @@ func (sh *searchHost) fillHostAppInfo(appInfoLevelInst map[int64]*appLevelInfo, 
 			appInfoArr = append(appInfoArr, appInfo)
 		}
 		appLevelInfo.appID = appID
-		appLevelInfo.appName, err = appInfo.String(common.BKAppName)
+		appLevelInfo.appName, err = appInfo.String(common.BKAppNameField)
 		if err != nil {
 			blog.Warnf("hostSearch not found app name, appInfo:%d, rid:%s", appInfo, sh.ccRid)
 			continue
@@ -425,16 +420,16 @@ func (sh *searchHost) fillHostModuleInfo(appInfoLevelInst map[int64]*appLevelInf
 	moduleInfoArr := make([]mapstr.MapStr, 0)
 	for _, appLevelInfo := range appInfoLevelInst {
 		for _, setLevelInfo := range appLevelInfo.setInfoMap {
-			for mdouleID, _ := range setLevelInfo.moduleInfoMap {
+			for mdouleID := range setLevelInfo.moduleInfoMap {
 				moduleInfo, ok := sh.cacheInfoMap.moduleInfoMap[mdouleID]
 				if false == ok {
-					blog.Warnf("hostSearch not found module id, moduleID:%d, hostModuleMap:%v, rid:%s", mdouleID, sh.cacheInfoMap.moduleInfoMap, sh.ccRid)
+					blog.V(5).Infof("hostSearch not found module id, moduleID:%d, hostModuleMap:%v, rid:%s", mdouleID, sh.cacheInfoMap.moduleInfoMap, sh.ccRid)
 					continue
 				}
 
 				moduleName, err := moduleInfo.String(common.BKModuleNameField)
 				if nil != err {
-					blog.Warnf("hostSearch not found module name, moduleID:%d, hostModuleMap:%v, rid:%s", mdouleID, sh.cacheInfoMap.moduleInfoMap, sh.ccRid)
+					blog.V(5).Infof("hostSearch not found module name, moduleID:%d, hostModuleMap:%v, rid:%s", mdouleID, sh.cacheInfoMap.moduleInfoMap, sh.ccRid)
 					continue
 				}
 				datacp := make(map[string]interface{})
@@ -455,15 +450,15 @@ func (sh *searchHost) fillHostModuleInfo(appInfoLevelInst map[int64]*appLevelInf
 func (sh *searchHost) fetchTopoAppCacheInfo(appIDArr []int64) (map[int64]mapstr.MapStr, errors.CCError) {
 
 	if nil != sh.conds.appCond.Fields {
-		exist := util.InArray(common.BKAppIDField, sh.conds.appCond.Fields)
-		if 0 != len(sh.conds.appCond.Fields) && !exist {
+		if len(sh.conds.appCond.Fields) != 0 {
 			sh.conds.appCond.Fields = append(sh.conds.appCond.Fields, common.BKAppIDField)
+			sh.conds.appCond.Fields = append(sh.conds.appCond.Fields, common.BKAppNameField)
 		}
 		cond := mapstr.New()
 		celld := mapstr.New()
 		celld.Set(common.BKDBIN, appIDArr)
 		cond.Set(common.BKAppIDField, celld)
-		return sh.lgc.GetAppMapByCond(sh.ctx, sh.conds.appCond.Fields, cond)
+		return sh.lgc.GetAppMapByCond(sh.kit, sh.conds.appCond.Fields, cond)
 
 	}
 	return nil, nil
@@ -480,7 +475,7 @@ func (sh *searchHost) fetchTopoSetCacheInfo(setIDArr []int64) (map[int64]mapstr.
 		celld := mapstr.New()
 		celld.Set(common.BKDBIN, setIDArr)
 		cond.Set(common.BKSetIDField, celld)
-		return sh.lgc.GetSetMapByCond(sh.ctx, sh.conds.setCond.Fields, cond)
+		return sh.lgc.GetSetMapByCond(sh.kit, sh.conds.setCond.Fields, cond)
 	}
 
 	return nil, nil
@@ -496,7 +491,7 @@ func (sh *searchHost) fetchTopoModuleCacheInfo(moduleIDArr []int64) (map[int64]m
 		celld := mapstr.New()
 		celld.Set(common.BKDBIN, moduleIDArr)
 		cond.Set(common.BKModuleIDField, celld)
-		return sh.lgc.GetModuleMapByCond(sh.ctx, sh.conds.moduleCond.Fields, cond)
+		return sh.lgc.GetModuleMapByCond(sh.kit, sh.conds.moduleCond.Fields, cond)
 
 	}
 
@@ -525,9 +520,6 @@ func (sh *searchHost) searchByTopo() errors.CCError {
 	if err != nil {
 		return err
 	}
-	if sh.noData {
-		return nil
-	}
 	return nil
 }
 
@@ -536,7 +528,7 @@ func (sh *searchHost) searchByPlatCondition() errors.CCError {
 		return nil
 	}
 	if len(sh.conds.platCond.Condition) > 0 {
-		instIDArr, err := sh.lgc.GetObjectInstByCond(sh.ctx, common.BKInnerObjIDPlat, sh.conds.platCond.Condition)
+		instIDArr, err := sh.lgc.GetObjectInstByCond(sh.kit, common.BKInnerObjIDPlat, sh.conds.platCond.Condition)
 		if err != nil {
 			return err
 		}
@@ -544,12 +536,12 @@ func (sh *searchHost) searchByPlatCondition() errors.CCError {
 			sh.noData = true
 			return nil
 		}
+		sh.conds.platCond.Condition = nil
 		sh.conds.hostCond.Condition = append(sh.conds.hostCond.Condition, metadata.ConditionItem{
 			Field:    common.BKCloudIDField,
 			Operator: common.BKDBIN,
 			Value:    instIDArr,
 		})
-
 	}
 
 	return nil
@@ -559,8 +551,12 @@ func (sh *searchHost) searchByApp() errors.CCError {
 	if sh.noData {
 		return nil
 	}
-	if len(sh.conds.appCond.Condition) > 0 {
-		appIDArr, err := sh.lgc.GetAppIDByCond(sh.ctx, sh.conds.appCond.Condition)
+	if len(sh.conds.appCond.Condition) > 0 || sh.conds.appCond.TimeCondition != nil {
+		cond := metadata.ConditionWithTime{
+			Condition:     sh.conds.appCond.Condition,
+			TimeCondition: sh.conds.appCond.TimeCondition,
+		}
+		appIDArr, err := sh.lgc.GetAppIDByCond(sh.kit, cond)
 		if err != nil {
 			return err
 		}
@@ -568,13 +564,13 @@ func (sh *searchHost) searchByApp() errors.CCError {
 			sh.noData = true
 			return nil
 		}
+		sh.conds.appCond.Condition = nil
 		sh.idArr.moduleHostConfig.appIDArr = appIDArr
 	}
 	return nil
 }
 
 func (sh *searchHost) searchByMainline() errors.CCError {
-
 	if sh.noData {
 		return nil
 	}
@@ -583,9 +579,9 @@ func (sh *searchHost) searchByMainline() errors.CCError {
 	setIDArr := make([]int64, 0)
 	objSetIDArr := make([]int64, 0)
 
-	//search mainline object by cond
+	// search mainline object by cond
 	if len(sh.conds.mainlineCond.Condition) > 0 {
-		objSetIDArr, err = sh.lgc.GetSetIDByObjectCond(sh.ctx, sh.hostSearchParam.AppID, sh.conds.mainlineCond.Condition)
+		objSetIDArr, err = sh.lgc.GetSetIDByObjectCond(sh.kit, sh.hostSearchParam.AppID, sh.conds.mainlineCond.Condition)
 		if err != nil {
 			return err
 		}
@@ -593,24 +589,27 @@ func (sh *searchHost) searchByMainline() errors.CCError {
 			sh.noData = true
 			return nil
 		}
+		sh.conds.mainlineCond.Condition = nil
+		sh.conds.setCond.Condition = append(sh.conds.setCond.Condition, metadata.ConditionItem{
+			Field:    common.BKSetIDField,
+			Operator: common.BKDBIN,
+			Value:    objSetIDArr,
+		})
 	}
-	//search set by appcond
-	if len(sh.conds.setCond.Condition) > 0 || len(sh.conds.mainlineCond.Condition) > 0 {
-		if len(sh.conds.appCond.Condition) > 0 {
+	// search set by appcond
+	if len(sh.conds.setCond.Condition) > 0 || sh.conds.setCond.TimeCondition != nil {
+		if len(sh.idArr.moduleHostConfig.appIDArr) > 0 {
 			sh.conds.setCond.Condition = append(sh.conds.setCond.Condition, metadata.ConditionItem{
 				Field:    common.BKAppIDField,
 				Operator: common.BKDBIN,
 				Value:    sh.idArr.moduleHostConfig.appIDArr,
 			})
 		}
-		if len(sh.conds.mainlineCond.Condition) > 0 {
-			sh.conds.setCond.Condition = append(sh.conds.setCond.Condition, metadata.ConditionItem{
-				Field:    common.BKSetIDField,
-				Operator: common.BKDBIN,
-				Value:    objSetIDArr,
-			})
+		cond := metadata.ConditionWithTime{
+			Condition:     sh.conds.setCond.Condition,
+			TimeCondition: sh.conds.setCond.TimeCondition,
 		}
-		setIDArr, err = sh.lgc.GetSetIDByCond(sh.ctx, sh.conds.setCond.Condition)
+		setIDArr, err = sh.lgc.GetSetIDByCond(sh.kit, cond)
 		if err != nil {
 			return err
 		}
@@ -618,9 +617,7 @@ func (sh *searchHost) searchByMainline() errors.CCError {
 			sh.noData = true
 			return nil
 		}
-	}
-
-	if len(sh.conds.setCond.Condition) > 0 {
+		sh.conds.setCond.Condition = nil
 		sh.idArr.moduleHostConfig.setIDArr = setIDArr
 	}
 
@@ -631,15 +628,15 @@ func (sh *searchHost) searchByModule() errors.CCError {
 	if sh.noData {
 		return nil
 	}
-	if len(sh.conds.moduleCond.Condition) > 0 {
-		if len(sh.conds.setCond.Condition) > 0 {
+	if len(sh.conds.moduleCond.Condition) > 0 || sh.conds.moduleCond.TimeCondition != nil {
+		if len(sh.idArr.moduleHostConfig.setIDArr) > 0 {
 			sh.conds.moduleCond.Condition = append(sh.conds.moduleCond.Condition, metadata.ConditionItem{
 				Field:    common.BKSetIDField,
 				Operator: common.BKDBIN,
 				Value:    sh.idArr.moduleHostConfig.setIDArr,
 			})
 		}
-		if len(sh.conds.appCond.Condition) > 0 {
+		if len(sh.idArr.moduleHostConfig.appIDArr) > 0 {
 			sh.conds.moduleCond.Condition = append(sh.conds.moduleCond.Condition, metadata.ConditionItem{
 				Field:    common.BKAppIDField,
 				Operator: common.BKDBIN,
@@ -647,7 +644,11 @@ func (sh *searchHost) searchByModule() errors.CCError {
 			})
 		}
 		//search module by cond
-		moduleIDArr, err := sh.lgc.GetModuleIDByCond(sh.ctx, sh.conds.moduleCond.Condition)
+		cond := metadata.ConditionWithTime{
+			Condition:     sh.conds.moduleCond.Condition,
+			TimeCondition: sh.conds.moduleCond.TimeCondition,
+		}
+		moduleIDArr, err := sh.lgc.GetModuleIDByCond(sh.kit, cond)
 		if err != nil {
 			return err
 		}
@@ -655,9 +656,8 @@ func (sh *searchHost) searchByModule() errors.CCError {
 			sh.noData = true
 			return nil
 		}
-		if len(sh.conds.moduleCond.Condition) > 0 {
-			sh.idArr.moduleHostConfig.moduleIDArr = moduleIDArr
-		}
+		sh.conds.moduleCond.Condition = nil
+		sh.idArr.moduleHostConfig.moduleIDArr = moduleIDArr
 	}
 
 	return nil
@@ -672,29 +672,47 @@ func (sh *searchHost) searchByHostConds() errors.CCError {
 	if err != nil {
 		return err
 	}
+	if sh.noData {
+		return nil
+	}
 
 	if 0 != len(sh.conds.hostCond.Fields) {
-		sh.conds.hostCond.Fields = append(sh.conds.hostCond.Fields, common.BKHostIDField)
+		sh.conds.hostCond.Fields = append(sh.conds.hostCond.Fields, common.BKHostIDField, common.BKCloudIDField)
 	}
 
 	condition := make(map[string]interface{})
-	hostParse.ParseHostParams(sh.conds.hostCond.Condition, condition)
-	hostParse.ParseHostIPParams(sh.hostSearchParam.Ip, condition)
-
-	query := &metadata.QueryInput{
-		Condition: condition,
-		Start:     sh.hostSearchParam.Page.Start,
-		Limit:     sh.hostSearchParam.Page.Limit,
-		Sort:      sh.hostSearchParam.Page.Sort,
+	err = hostParse.ParseHostParams(sh.conds.hostCond.Condition, condition)
+	if err != nil {
+		return err
 	}
 
-	gResult, err := sh.lgc.CoreAPI.HostController().Host().GetHosts(sh.ctx, sh.pheader, query)
+	err = hostParse.ParseHostIPParams(sh.hostSearchParam.Ip, condition)
 	if err != nil {
-		blog.Errorf("get hosts failed, err: %v", err)
+		return err
+	}
+
+	query := &metadata.QueryInput{
+		Condition:     condition,
+		TimeCondition: sh.conds.hostCond.TimeCondition,
+		Start:         sh.hostSearchParam.Page.Start,
+		Limit:         sh.hostSearchParam.Page.Limit,
+		Sort:          sh.hostSearchParam.Page.Sort,
+		Fields:        strings.Join(sh.conds.hostCond.Fields, ","),
+	}
+	sh.conds.hostCond.Fields = nil
+	sh.hostSearchParam = nil
+
+	if sh.paged {
+		query.Start = 0
+	}
+
+	gResult, err := sh.lgc.CoreAPI.CoreService().Host().GetHosts(sh.ctx, sh.pheader, query)
+	if err != nil {
+		blog.Errorf("get hosts failed, err: %v, rid: %s", err, sh.ccRid)
 		return err
 	}
 	if !gResult.Result {
-		blog.Errorf("get host failed, error code:%d, error message:%s", gResult.Code, gResult.ErrMsg)
+		blog.Errorf("get host failed, error code:%d, error message:%s, rid: %s", gResult.Code, gResult.ErrMsg, sh.ccRid)
 		return sh.ccErr.New(gResult.Code, gResult.ErrMsg)
 	}
 
@@ -702,68 +720,190 @@ func (sh *searchHost) searchByHostConds() errors.CCError {
 		sh.noData = true
 	}
 
-	sh.totalHostCnt = gResult.Data.Count
+	if !sh.paged {
+		sh.totalHostCnt = gResult.Data.Count
+	}
+
+	if sh.searchedHostIDs == nil {
+		sh.searchedHostIDs = make([]int64, 0)
+	}
+	if sh.searchCloudIDs == nil {
+		sh.searchCloudIDs = make([]int64, 0)
+	}
+
 	for _, host := range gResult.Data.Info {
 		hostID, err := util.GetInt64ByInterface(host[common.BKHostIDField])
 		if err != nil {
 			return err
 		}
+
+		cloudID, err := host.Int64(common.BKCloudIDField)
+		if err != nil {
+			blog.Warnf("hostSearch not found  cloud id in hsot, hostInfo:%d, rid:%s", host, sh.ccRid)
+			continue
+		}
+		sh.searchedHostIDs = append(sh.searchedHostIDs, hostID)
+		sh.searchCloudIDs = append(sh.searchCloudIDs, cloudID)
+
 		sh.hostInfoArr = append(sh.hostInfoArr, hostInfoStruct{
 			hostID:   hostID,
 			hostInfo: host,
 		})
 	}
+
+	sh.searchedHostIDs = util.IntArrayUnique(sh.searchedHostIDs)
+	sh.searchCloudIDs = util.IntArrayUnique(sh.searchCloudIDs)
+
 	return nil
 }
 
 func (sh *searchHost) appendHostTopoConds() errors.CCError {
-	moduleHostConfig := make(map[string][]int64)
+	var moduleHostConfig metadata.DistinctHostIDByTopoRelationRequest
 	isAddHostID := false
-	if len(sh.conds.appCond.Condition) > 0 {
-		moduleHostConfig[common.BKAppIDField] = sh.idArr.moduleHostConfig.appIDArr
+
+	if len(sh.idArr.moduleHostConfig.setIDArr) > 0 {
+		moduleHostConfig.SetIDArr = sh.idArr.moduleHostConfig.setIDArr
 		isAddHostID = true
 	}
-	if len(sh.conds.setCond.Condition) > 0 {
-		moduleHostConfig[common.BKSetIDField] = sh.idArr.moduleHostConfig.setIDArr
-		isAddHostID = true
-	}
-	if len(sh.conds.moduleCond.Condition) > 0 {
-		moduleHostConfig[common.BKModuleIDField] = sh.idArr.moduleHostConfig.moduleIDArr
+	if len(sh.idArr.moduleHostConfig.moduleIDArr) > 0 {
+		moduleHostConfig.ModuleIDArr = sh.idArr.moduleHostConfig.moduleIDArr
 		isAddHostID = true
 	}
 	if len(sh.conds.objectCondMap) > 0 {
-		moduleHostConfig[common.BKHostIDField] = sh.idArr.moduleHostConfig.asstHostIDArr
+		moduleHostConfig.HostIDArr = sh.idArr.moduleHostConfig.asstHostIDArr
 		isAddHostID = true
 	}
+
+	if len(sh.idArr.moduleHostConfig.appIDArr) > 0 {
+		// already sorted by app id.
+		moduleHostConfig.ApplicationIDArr = sh.idArr.moduleHostConfig.appIDArr
+		isAddHostID = true
+	}
+
 	if !isAddHostID {
 		return nil
 	}
-	hostIDArr, err := sh.lgc.GetHostIDByCond(sh.ctx, moduleHostConfig)
+
+	var hostIDArr []int64
+
+	respHostIDInfo, err := sh.lgc.CoreAPI.CoreService().Host().GetDistinctHostIDByTopology(sh.ctx, sh.kit.Header, &moduleHostConfig)
 	if err != nil {
-		blog.Errorf("GetHostIDByCond get hosts failed, err: %v", err)
+		blog.Errorf("get hosts failed, err: %v, rid: %s", err, sh.ccRid)
+		return sh.ccErr.CCError(common.CCErrCommHTTPDoRequestFailed)
+	}
+	if err := respHostIDInfo.CCError(); err != nil {
+		blog.Errorf("get host id by topology relation failed, error code:%d, error message:%s, cond: %s, rid: %s", respHostIDInfo.Code, respHostIDInfo.ErrMsg, moduleHostConfig, sh.ccRid)
 		return err
 	}
-	sh.conds.hostCond.Condition = append(sh.conds.hostCond.Condition, metadata.ConditionItem{
-		Field:    common.BKHostIDField,
-		Operator: common.BKDBIN,
-		Value:    hostIDArr,
-	})
+
+	sh.totalHostCnt = len(respHostIDInfo.Data.IDArr)
+	// 当有根据主机实例内容查询的时候的时候，无法在程序中完成分页
+	hasHostCond := false
+	if len(sh.hostSearchParam.Ip.Data) > 0 || len(sh.conds.hostCond.Condition) > 0 || sh.conds.hostCond.TimeCondition != nil {
+		hasHostCond = true
+	}
+	if !hasHostCond && sh.hostSearchParam.Page.Limit > 0 {
+		start := sh.hostSearchParam.Page.Start
+		limit := start + sh.hostSearchParam.Page.Limit
+
+		uniqHostIDCnt := len(respHostIDInfo.Data.IDArr)
+		// 如果用户start 设置小于0， 将start 设置为默认值
+		if start < 0 {
+			start = 0
+		}
+		if start >= uniqHostIDCnt {
+			sh.noData = true
+			return nil
+		}
+		allHostIDsArr := respHostIDInfo.Data.IDArr
+		sort.Slice(allHostIDsArr, func(i, j int) bool { return allHostIDsArr[i] < allHostIDsArr[j] })
+		if uniqHostIDCnt <= limit {
+			hostIDArr = allHostIDsArr[start:]
+		} else {
+			hostIDArr = allHostIDsArr[start:limit]
+		}
+		sh.paged = true
+	} else {
+		if len(respHostIDInfo.Data.IDArr) == 0 {
+			sh.noData = true
+			return nil
+		}
+		hostIDArr = respHostIDInfo.Data.IDArr
+	}
+
+	// 合并两种涞源的根据 host_id 查询的 condition
+	// 详情见issue: https://github.com/Tencent/bk-cmdb/issues/2461
+	hostIDConditionExist := false
+	for idx, cond := range sh.conds.hostCond.Condition {
+		if cond.Field != common.BKHostIDField {
+			continue
+		}
+
+		// merge two condition
+		// {"field": "bk_host_id", "operator": "$eq", "value": 1}
+		// {"field": "bk_host_id", "operator": "$eq", "value": [1, 2]}
+		// ==> {"field": "bk_host_id", "operator": "", "value": {"$in": [1,2], "$eq": 1}}
+		hostIDConditionExist = true
+		if cond.Operator != common.BKDBIN {
+			// it's somewhat trick here to use common.BKDBEQ as merge operator
+			cond = metadata.ConditionItem{
+				Field:    common.BKHostIDField,
+				Operator: common.BKDBEQ,
+				Value: map[string]interface{}{
+					cond.Operator: cond.Value,
+					common.BKDBIN: hostIDArr,
+				},
+			}
+			sh.conds.hostCond.Condition[idx] = cond
+		} else {
+			// intersection of two array
+			value, ok := cond.Value.([]interface{})
+			if ok == false {
+				blog.Errorf("invalid query condition with $in operator, value must be []int64, but got: %+v, rid: %s", cond.Value, sh.ccRid)
+				return sh.ccErr.New(common.CCErrCommParamsIsInvalid, common.BKHostIDField)
+			}
+			hostIDMap := make(map[int64]bool)
+			for _, hostID := range hostIDArr {
+				hostIDMap[hostID] = true
+			}
+			shareIDs := make([]int64, 0)
+			for _, hostID := range value {
+				id, err := util.GetInt64ByInterface(hostID)
+				if err != nil {
+					blog.Errorf("invalid query condition with $in operator, value must be []int64, but got: %+v, rid: %s", cond.Value, sh.ccRid)
+					return sh.ccErr.New(common.CCErrCommParamsIsInvalid, common.BKHostIDField)
+				}
+
+				if hostIDMap[id] {
+					shareIDs = append(shareIDs, id)
+				}
+			}
+			sh.conds.hostCond.Condition[idx].Value = shareIDs
+		}
+	}
+	if hostIDConditionExist == false {
+		sh.conds.hostCond.Condition = append(sh.conds.hostCond.Condition, metadata.ConditionItem{
+			Field:    common.BKHostIDField,
+			Operator: common.BKDBIN,
+			Value:    hostIDArr,
+		})
+	}
 
 	return nil
 }
 
-// searchByAssocation  Query host information based on associated objects, alternate code
-func (sh *searchHost) searchByAssocation() errors.CCError {
+// Query host information based on associated objects, alternate code
+func (sh *searchHost) searchByAssociation() errors.CCError {
 	instAsstHostIDArr := make([]int64, 0)
 	//search host id by object
 	firstCond := true
 	if len(sh.conds.objectCondMap) > 0 {
 		for objID, objCond := range sh.conds.objectCondMap {
-			instIDArr, err := sh.lgc.GetObjectInstByCond(sh.ctx, objID, objCond)
+			instIDArr, err := sh.lgc.GetObjectInstByCond(sh.kit, objID, objCond)
 			if err != nil {
 				return err
 			}
-			instHostIDArr, err := sh.lgc.GetHostIDByInstID(sh.ctx, objID, instIDArr)
+			instHostIDArr, err := sh.lgc.GetHostIDByInstID(sh.kit, objID, instIDArr)
 			if err != nil {
 				return err
 			}

@@ -14,76 +14,61 @@ package user
 
 import (
 	"encoding/json"
-	"plugin"
-	"strconv"
 
 	"configcenter/src/common"
 	"configcenter/src/common/backbone"
 	"configcenter/src/common/blog"
+	"configcenter/src/common/errors"
 	"configcenter/src/common/metadata"
+	"configcenter/src/common/util"
+	"configcenter/src/storage/dal/redis"
 	"configcenter/src/web_server/app/options"
-	webCommon "configcenter/src/web_server/common"
 	"configcenter/src/web_server/middleware/user/plugins"
 
 	"github.com/gin-gonic/gin"
 	"github.com/holmeswang/contrib/sessions"
-	redis "gopkg.in/redis.v5"
 )
 
 type publicUser struct {
 	config   options.Config
 	engine   *backbone.Engine
-	cacheCli *redis.Client
-	loginPlg *plugin.Plugin
+	cacheCli redis.Client
 }
 
 // LoginUser  user login
 func (m *publicUser) LoginUser(c *gin.Context) bool {
+	rid := util.GetHTTPCCRequestID(c.Request.Header)
 
 	isMultiOwner := false
-	loginSucc := false
+	loginSuccess := false
 	var userInfo *metadata.LoginUserInfo
 	multipleOwner := m.config.Session.MultipleOwner
 	if common.LoginSystemMultiSupplierTrue == multipleOwner {
 		isMultiOwner = true
 	}
 
-	if nil == m.loginPlg {
-		user := plugins.CurrentPlugin(c, m.config.LoginVersion)
-		userInfo, loginSucc = user.LoginUser(c, m.config.ConfigMap, isMultiOwner)
-	} else {
+	user := plugins.CurrentPlugin(c, m.config.LoginVersion)
+	userInfo, loginSuccess = user.LoginUser(c, m.config.ConfigMap, isMultiOwner)
 
-		loginUserFunc, err := m.loginPlg.Lookup("LoginUser")
-
-		if nil != err {
-			blog.Error("look login func error")
-			return false
-
-		}
-		userInfo, loginSucc = loginUserFunc.(func(c *gin.Context, config map[string]string, isMultiOwner bool) (user *metadata.LoginUserInfo, loginSucc bool))(c, m.config.ConfigMap, isMultiOwner)
-
-	}
-
-	if !loginSucc {
+	if !loginSuccess {
+		blog.Infof("login user with plugin failed, rid: %s", rid)
 		return false
 	}
 	if true == isMultiOwner || true == userInfo.MultiSupplier {
 		ownerM := NewOwnerManager(userInfo.UserName, userInfo.OnwerUin, userInfo.Language)
 		ownerM.CacheCli = m.cacheCli
 		ownerM.Engine = m.engine
-		ownerM.SetHttpHeader(common.BKHTTPSupplierID, strconv.FormatInt(userInfo.SupplierID, 10))
-		err := ownerM.InitOwner()
+		// 初始化失败，不影响登录
+		_, err := ownerM.InitOwner()
 		if nil != err {
-			blog.Errorf("InitOwner error: %v", err)
-			return false
+			blog.ErrorJSON("init onwer resource pool failed, err:%s, user:%s, rid: %s", err, userInfo, rid)
 		}
 	}
-	strOwnerUinlist := []byte("")
+	strOwnerUinList := []byte("")
 	if 0 != len(userInfo.OwnerUinArr) {
-		strOwnerUinlist, _ = json.Marshal(userInfo.OwnerUinArr)
+		strOwnerUinList, _ = json.Marshal(userInfo.OwnerUinArr)
 	}
 
-	cookielanguage, _ := c.Cookie("blueking_language")
 	session := sessions.Default(c)
 
 	session.Set(common.WEBSessionUinKey, userInfo.UserName)
@@ -94,55 +79,17 @@ func (m *publicUser) LoginUser(c *gin.Context) bool {
 	session.Set(common.HTTPCookieBKToken, userInfo.BkToken)
 	session.Set(common.WEBSessionOwnerUinKey, userInfo.OnwerUin)
 	session.Set(common.WEBSessionAvatarUrlKey, userInfo.AvatarUrl)
-	session.Set(common.WEBSessionOwnerUinListeKey, string(strOwnerUinlist))
-	session.Set(common.WEBSessionSupplierID, strconv.FormatInt(userInfo.SupplierID, 10))
+	session.Set(common.WEBSessionOwnerUinListeKey, string(strOwnerUinList))
 	if userInfo.MultiSupplier {
 		session.Set(common.WEBSessionMultiSupplierKey, common.LoginSystemMultiSupplierTrue)
 	} else {
 		session.Set(common.WEBSessionMultiSupplierKey, common.LoginSystemMultiSupplierFalse)
 	}
 
-	session.Set(webCommon.IsSkipLogin, "0")
-	if "" != cookielanguage {
-		session.Set(common.WEBSessionLanguageKey, cookielanguage)
-	} else {
-		session.Set(common.WEBSessionLanguageKey, userInfo.Language)
+	if err := session.Save(); err != nil {
+		blog.Warnf("save session failed, err: %s, rid: %s", err.Error(), rid)
 	}
-	session.Save()
 	return true
-}
-
-// GetUserList get user list from paas
-func (m *publicUser) GetUserList(c *gin.Context) (int, interface{}) {
-	var err error
-	var userList []*metadata.LoginSystemUserInfo
-	rspBody := metadata.LonginSystemUserListResult{}
-	rspBody.Result = false
-	if nil == m.loginPlg {
-		user := plugins.CurrentPlugin(c, m.config.LoginVersion)
-		userList, err = user.GetUserList(c, m.config.ConfigMap)
-	} else {
-
-		getUserListFunc, err := m.loginPlg.Lookup("GetUserList")
-
-		if nil != err {
-			blog.Error("look get user list error")
-			rspBody.Code = common.CCErrCommHTTPDoRequestFailed
-			rspBody.ErrMsg = err.Error()
-			return 200, rspBody
-
-		}
-		userList, err = getUserListFunc.(func(c *gin.Context, config map[string]string) ([]*metadata.LoginSystemUserInfo, error))(c, m.config.ConfigMap)
-
-	}
-	if nil != err {
-		rspBody.Code = common.CCErrCommHTTPDoRequestFailed
-		rspBody.ErrMsg = err.Error()
-		rspBody.Result = false
-	}
-	rspBody.Result = true
-	rspBody.Data = userList
-	return 200, rspBody
 }
 
 func (m *publicUser) GetLoginUrl(c *gin.Context) string {
@@ -156,20 +103,12 @@ func (m *publicUser) GetLoginUrl(c *gin.Context) string {
 		}
 	}
 
-	if nil == m.loginPlg {
-		user := plugins.CurrentPlugin(c, m.config.LoginVersion)
-		return user.GetLoginUrl(c, m.config.ConfigMap, params)
-	} else {
+	user := plugins.CurrentPlugin(c, m.config.LoginVersion)
+	return user.GetLoginUrl(c, m.config.ConfigMap, params)
 
-		getLoginUrlFunc, err := m.loginPlg.Lookup("GetLoginUrl")
+}
 
-		if nil != err {
-			blog.Error("look get url func error")
-			return ""
-
-		}
-		return getLoginUrlFunc.(func(c *gin.Context, config map[string]string, input *metadata.LogoutRequestParams) string)(c, m.config.ConfigMap, params)
-
-	}
-
+func (m *publicUser) GetUserList(c *gin.Context) ([]*metadata.LoginSystemUserInfo, *errors.RawErrorInfo) {
+	user := plugins.CurrentPlugin(c, m.config.LoginVersion)
+	return user.GetUserList(c, m.config.ConfigMap)
 }

@@ -13,6 +13,8 @@
 package logics
 
 import (
+	"configcenter/src/common/util"
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -23,8 +25,9 @@ import (
 	"github.com/rentiansheng/xlsx"
 )
 
-// ProductExcelHealer Excel comment sheet，
-func ProductExcelCommentSheet(excel *xlsx.File, defLang lang.DefaultCCLanguageIf) {
+// ProductExcelHeader Excel comment sheet，
+func ProductExcelCommentSheet(ctx context.Context, excel *xlsx.File, defLang lang.DefaultCCLanguageIf) {
+	rid := util.ExtractRequestIDFromContext(ctx)
 	sheetName := defLang.Language(common.ExcelCommentSheetCotentLangPrefixKey + "_sheet_name")
 	if "" == sheetName {
 		sheetName = "comment"
@@ -32,18 +35,18 @@ func ProductExcelCommentSheet(excel *xlsx.File, defLang lang.DefaultCCLanguageIf
 
 	sheet, err := excel.AddSheet(sheetName)
 	if nil != err {
-		blog.Errorf("add comment sheet error,sheet name:%s, error:%s ", sheetName, err.Error())
+		blog.Errorf("add comment sheet error,sheet name:%s, error:%s , rid: %s", sheetName, err.Error(), rid)
 		return
 	}
 	strJSON := defLang.Language(common.ExcelCommentSheetCotentLangPrefixKey + "_sheet")
 	if "" == strJSON {
-		blog.Errorf("excel comment sheet content is empty")
+		blog.Errorf("excel comment sheet content is empty, rid: %s", rid)
 		return
 	}
 	var jsSheet jsonSheet
 	err = json.Unmarshal([]byte(strJSON), &jsSheet)
 	if nil != err {
-		blog.Errorf("excel comment sheet content not json format ")
+		blog.Errorf("excel comment sheet content not json format , rid: %s", rid)
 		return
 	}
 

@@ -25,12 +25,12 @@ import (
 func createObjectUnitTable(ctx context.Context, db dal.RDB, conf *upgrader.Config) error {
 	tablenames := []string{common.BKTableNameObjUnique}
 	for _, tablename := range tablenames {
-		exists, err := db.HasTable(tablename)
+		exists, err := db.HasTable(ctx, tablename)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			if err = db.CreateTable(tablename); err != nil && !db.IsDuplicatedError(err) {
+			if err = db.CreateTable(ctx, tablename); err != nil && !db.IsDuplicatedError(err) {
 				return err
 			}
 		}
@@ -60,7 +60,7 @@ type Attribute struct {
 	Option            interface{} `json:"option" bson:"option"`
 	Description       string      `json:"description" bson:"description"`
 	Creator           string      `json:"creator" bson:"creator"`
-	CreateTime        *time.Time  `json:"create_time" bson:"creaet_time"`
+	CreateTime        *time.Time  `json:"create_time" bson:"create_time"`
 	LastTime          *time.Time  `json:"last_time" bson:"last_time"`
 }
 
@@ -271,7 +271,12 @@ func reconcilUnique(ctx context.Context, db dal.RDB, conf *upgrader.Config) erro
 		uniques = append(uniques, unique)
 	}
 
-	for _, unique := range uniques {
+	uniqueIDs, err := db.NextSequences(ctx, common.BKTableNameObjUnique, len(uniques))
+	if err != nil {
+		return err
+	}
+
+	for index, unique := range uniques {
 		exists, err := isUniqueExists(ctx, db, conf, unique)
 		if err != nil {
 			return err
@@ -280,11 +285,7 @@ func reconcilUnique(ctx context.Context, db dal.RDB, conf *upgrader.Config) erro
 			continue
 		}
 
-		uid, err := db.NextSequence(ctx, common.BKTableNameObjUnique)
-		if err != nil {
-			return err
-		}
-		unique.ID = uid
+		unique.ID = uniqueIDs[index]
 		if err := db.Table(common.BKTableNameObjUnique).Insert(ctx, unique); err != nil {
 			return err
 		}

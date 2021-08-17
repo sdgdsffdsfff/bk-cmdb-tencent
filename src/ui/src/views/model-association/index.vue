@@ -1,253 +1,317 @@
 <template>
-    <div class="relation-wrapper">
-        <p class="operation-box">
-            <bk-button type="primary"
-                :disabled="!authority.includes('update')"
-                @click="createRelation">
-                {{$t('Common["新建"]')}}
+  <div class="relation-wrapper">
+    <cmdb-tips
+      class="mb10"
+      tips-key="associationTips"
+      more-link="https://bk.tencent.com/docs/markdown/配置平台/产品白皮书/产品功能/ModelRelationType.md">
+      {{$t('关联关系提示')}}
+    </cmdb-tips>
+    <p class="operation-box clearfix">
+      <cmdb-auth class="inline-block-middle"
+        :auth="{ type: $OPERATION.C_RELATION }">
+        <bk-button slot-scope="{ disabled }"
+          theme="primary"
+          class="create-btn"
+          :disabled="disabled"
+          @click="createRelation">
+          {{$t('新建')}}
+        </bk-button>
+      </cmdb-auth>
+      <label class="search-input fr">
+        <!-- <i class="bk-icon icon-search" @click="searchRelation(true)"></i> -->
+        <bk-input type="text" class="cmdb-form-input"
+          clearable
+          v-model.trim="searchText"
+          :right-icon="'bk-icon icon-search'"
+          :placeholder="$t('请输入关联类型名称')"
+          font-size="medium"
+          @clear="searchRelation(true)"
+          @enter="searchRelation(true)">
+        </bk-input>
+      </label>
+    </p>
+    <bk-table
+      v-bkloading="{ isLoading: $loading('searchAssociationType') }"
+      :max-height="$APP.height - 229"
+      :data="table.list"
+      :pagination="table.pagination"
+      :row-style="{ cursor: 'pointer' }"
+      @row-click="handleShowDetails"
+      @page-change="handlePageChange"
+      @page-limit-change="handleSizeChange"
+      @sort-change="handleSortChange">
+      <bk-table-column prop="bk_asst_id" :label="$t('唯一标识')" sortable="custom"
+        class-name="is-highlight" show-overflow-tooltip>
+      </bk-table-column>
+      <bk-table-column prop="bk_asst_name" :label="$t('名称')" sortable="custom" show-overflow-tooltip>
+        <template slot-scope="{ row }">
+          {{row['bk_asst_name'] || '--'}}
+        </template>
+      </bk-table-column>
+      <bk-table-column prop="src_des" :label="$t('源->目标描述')" sortable="custom" show-overflow-tooltip></bk-table-column>
+      <bk-table-column prop="dest_des" :label="$t('目标->源描述')" sortable="custom" show-overflow-tooltip></bk-table-column>
+      <bk-table-column prop="count" :label="$t('使用数')"></bk-table-column>
+      <bk-table-column
+        fixed="right"
+        prop="operation"
+        :label="$t('操作')">
+        <template slot-scope="{ row }">
+          <cmdb-auth class="mr10"
+            :auth="{ type: $OPERATION.U_RELATION, relation: [row.id] }"
+            :ignore="row.ispre"
+            v-bk-tooltips="{
+              content: $t('禁止操作内置关联类型'),
+              disabled: !row.ispre
+            }">
+            <bk-button slot-scope="{ disabled }"
+              text
+              theme="primary"
+              :disabled="row.ispre || disabled"
+              @click.stop="editRelation(row)">
+              {{$t('编辑')}}
             </bk-button>
-            <label class="search-input">
-                <i class="bk-icon icon-search" @click="searchRelation"></i>
-                <input type="text" class="cmdb-form-input" v-model.trim="searchText" :placeholder="$t('ModelManagement[\'请输入关联类型名称\']')" @keyup.enter="searchRelation">
-            </label>
-        </p>
-        <cmdb-table
-            :loading="$loading('searchAssociationType')"
-            :header="table.header"
-            :list="table.list"
-            :pagination.sync="table.pagination"
-            @handlePageChange="handlePageChange"
-            @handleSizeChange="handleSizeChange"
-            @handleSortChange="handleSortChange">
-            <template slot="bk_asst_name" slot-scope="{ item }">
-                {{item['bk_asst_name'] || '--'}}
-            </template>
-            <template slot="operation" slot-scope="{ item }">
-                <template v-if="item.ispre">
-                    <span class="text-primary disabled mr10">
-                        {{$t('Common["编辑"]')}}
-                    </span>
-                    <span class="text-primary disabled">
-                        {{$t('Common["删除"]')}}
-                    </span>
-                </template>
-                <template v-else>
-                    <span class="text-primary mr10" @click.stop="editRelation(item)">
-                        {{$t('Common["编辑"]')}}
-                    </span>
-                    <span class="text-primary" @click.stop="deleteRelation(item)">
-                        {{$t('Common["删除"]')}}
-                    </span>
-                </template>
-            </template>
-        </cmdb-table>
-        <cmdb-slider
-            class="relation-slider"
-            :width="450"
-            :title="slider.title"
-            :isShow.sync="slider.isShow">
-            <the-relation
-                slot="content"
-                class="slider-content"
-                :isEdit="slider.isEdit"
-                :relation="slider.relation"
-                @saved="saveRelation"
-                @cancel="slider.isShow = false"
-            ></the-relation>
-        </cmdb-slider>
-    </div>
+          </cmdb-auth>
+          <cmdb-auth
+            :auth="{ type: $OPERATION.D_RELATION, relation: [row.id] }"
+            :ignore="row.ispre"
+            v-bk-tooltips="{
+              content: $t('禁止操作内置关联类型'),
+              disabled: !row.ispre
+            }">
+            <bk-button slot-scope="{ disabled }"
+              text
+              theme="primary"
+              :disabled="row.ispre || disabled"
+              @click.stop="deleteRelation(row)">
+              {{$t('删除')}}
+            </bk-button>
+          </cmdb-auth>
+        </template>
+      </bk-table-column>
+      <cmdb-table-empty
+        slot="empty"
+        :stuff="table.stuff"
+        :auth="{ type: $OPERATION.C_RELATION }"
+        @create="createRelation"
+      ></cmdb-table-empty>
+    </bk-table>
+    <bk-sideslider
+      v-transfer-dom
+      class="relation-slider"
+      :width="450"
+      :title="slider.title"
+      :is-show.sync="slider.isShow"
+      :before-close="handleSliderBeforeClose">
+      <the-relation
+        ref="relationForm"
+        slot="content"
+        class="model-slider-content"
+        v-if="slider.isShow"
+        :is-edit="slider.isEdit"
+        :is-read-only="slider.isReadOnly"
+        :relation="slider.relation"
+        :save-btn-text="slider.isEdit ? $t('保存') : $t('提交')"
+        @saved="saveRelation"
+        @cancel="handleSliderBeforeClose">
+      </the-relation>
+    </bk-sideslider>
+  </div>
 </template>
 
 <script>
-    import theRelation from './_detail'
-    import { mapGetters, mapActions } from 'vuex'
-    export default {
-        components: {
-            theRelation
+  import theRelation from './_detail'
+  import { mapActions } from 'vuex'
+  export default {
+    components: {
+      theRelation
+    },
+    data() {
+      return {
+        slider: {
+          isShow: false,
+          isEdit: false,
+          title: this.$t('新建关联类型'),
+          relation: {},
+          isReadOnly: false
         },
-        data () {
-            return {
-                slider: {
-                    isShow: false,
-                    isEdit: false,
-                    title: this.$t('ModelManagement["新建关联类型"]'),
-                    relation: {}
-                },
-                searchText: '',
-                table: {
-                    header: [{
-                        id: 'bk_asst_id',
-                        name: this.$t('ModelManagement["唯一标识"]')
-                    }, {
-                        id: 'bk_asst_name',
-                        name: this.$t('Hosts["名称"]')
-                    }, {
-                        id: 'src_des',
-                        name: this.$t('ModelManagement["源->目标描述"]')
-                    }, {
-                        id: 'dest_des',
-                        name: this.$t('ModelManagement["目标->源描述"]')
-                    }, {
-                        id: 'count',
-                        name: this.$t('ModelManagement["使用数"]'),
-                        sortable: false
-                    }, {
-                        id: 'operation',
-                        name: this.$t('Common["操作"]'),
-                        sortable: false
-                    }],
-                    list: [],
-                    pagination: {
-                        count: 0,
-                        current: 1,
-                        size: 10
-                    },
-                    defaultSort: '-ispre',
-                    sort: '-ispre'
-                }
+        searchText: '',
+        table: {
+          list: [],
+          pagination: {
+            count: 0,
+            current: 1,
+            ...this.$tools.getDefaultPaginationConfig()
+          },
+          defaultSort: '-ispre',
+          sort: '-ispre',
+          stuff: {
+            type: 'default',
+            payload: {
+              resource: this.$t('关联类型')
             }
+          }
         },
-        computed: {
-            ...mapGetters('objectModel', [
-                'activeModel'
-            ]),
-            isReadOnly () {
-                if (this.activeModel) {
-                    return this.activeModel['bk_ispaused']
-                }
-                return false
-            },
-            searchParams () {
-                let params = {
-                    page: {
-                        start: (this.table.pagination.current - 1) * this.table.pagination.size,
-                        limit: this.table.pagination.size,
-                        sort: this.table.sort
-                    }
-                }
-                if (this.searchText.length) {
-                    Object.assign(params, {
-                        condition: {
-                            bk_asst_name: {
-                                '$regex': this.searchText
-                            }
-                        }
-                    })
-                }
-                return params
-            },
-            authority () {
-                return this.$store.getters.admin ? ['search', 'update', 'delete'] : []
-            }
-        },
-        created () {
-            if (!this.authority.includes('update')) {
-                this.table.header.pop()
-            }
-            this.$store.commit('setHeaderTitle', this.$t('Nav["关联类型"]'))
-            this.searchRelation()
-        },
-        methods: {
-            ...mapActions('objectAssociation', [
-                'searchAssociationType',
-                'deleteAssociationType',
-                'searchAssociationListWithAssociationKindList'
-            ]),
-            searchRelation () {
-                this.searchAssociationType({
-                    params: this.searchParams,
-                    config: {
-                        requestId: 'searchAssociationType'
-                    }
-                }).then(data => {
-                    this.table.list = data.info
-                    this.searchUsageCount()
-                    this.table.pagination.count = data.count
-                    this.$http.cancel('post_searchAssociationType')
-                })
-            },
-            async searchUsageCount () {
-                let asstIds = []
-                this.table.list.forEach(({bk_asst_id: asstId}) => asstIds.push(asstId))
-                const res = await this.searchAssociationListWithAssociationKindList({
-                    params: {
-                        asst_ids: asstIds
-                    }
-                })
-                this.table.list.forEach(item => {
-                    let asst = res.associations.find(({bk_asst_id: asstId}) => asstId === item['bk_asst_id'])
-                    if (asst) {
-                        this.$set(item, 'count', asst.assts.length)
-                    }
-                })
-                this.table.list.splice()
-            },
-            createRelation () {
-                this.slider.title = this.$t('ModelManagement["新建关联类型"]')
-                this.slider.isEdit = false
-                this.slider.isShow = true
-            },
-            editRelation (relation) {
-                this.slider.title = this.$t('ModelManagement["编辑关联类型"]')
-                this.slider.relation = relation
-                this.slider.isEdit = true
-                this.slider.isShow = true
-            },
-            deleteRelation (relation) {
-                this.$bkInfo({
-                    title: this.$tc('ModelManagement["确定删除关联类型？"]', relation['bk_asst_name'], {name: relation['bk_asst_name']}),
-                    confirmFn: async () => {
-                        await this.deleteAssociationType({
-                            id: relation.id,
-                            config: {
-                                requestId: 'deleteAssociationType'
-                            }
-                        })
-                        this.searchRelation()
-                    }
-                })
-            },
-            saveRelation () {
-                this.slider.isShow = false
-                this.searchRelation()
-            },
-            handlePageChange (current) {
-                this.table.pagination.current = current
-                this.searchRelation()
-            },
-            handleSizeChange (size) {
-                this.table.pagination.size = size
-                this.handlePageChange(1)
-            },
-            handleSortChange (sort) {
-                this.table.sort = sort
-                this.searchRelation()
-            }
+        sendSearchText: ''
+      }
+    },
+    computed: {
+      searchParams() {
+        const params = {
+          page: {
+            start: (this.table.pagination.current - 1) * this.table.pagination.limit,
+            limit: this.table.pagination.limit,
+            sort: this.table.sort
+          }
         }
+        if (this.sendSearchText.length) {
+          Object.assign(params, {
+            condition: {
+              bk_asst_name: {
+                $regex: this.sendSearchText
+              }
+            }
+          })
+        }
+        return params
+      }
+    },
+    created() {
+      this.searchRelation()
+    },
+    methods: {
+      ...mapActions('objectAssociation', [
+        'searchAssociationType',
+        'deleteAssociationType',
+        'searchAssociationListWithAssociationKindList'
+      ]),
+      searchRelation(fromClick) {
+        if (fromClick) {
+          this.sendSearchText = this.searchText
+          this.table.pagination.current = 1
+          this.table.stuff.type = 'search'
+        }
+        this.searchAssociationType({
+          params: this.searchParams,
+          config: {
+            requestId: 'searchAssociationType'
+          }
+        }).then((data) => {
+          if (data.count && !data.info.length) {
+            this.table.pagination.current -= 1
+            this.searchRelation()
+          }
+          this.table.list = data.info
+          this.searchUsageCount()
+          this.table.pagination.count = data.count
+          this.$http.cancel('post_searchAssociationType')
+        })
+      },
+      async searchUsageCount() {
+        const asstIds = []
+        this.table.list.forEach(({ bk_asst_id: asstId }) => asstIds.push(asstId))
+        const res = await this.searchAssociationListWithAssociationKindList({
+          params: {
+            asst_ids: asstIds
+          }
+        })
+        this.table.list.forEach((item) => {
+          const asst = res.associations.find(({ bk_asst_id: asstId }) => asstId === item.bk_asst_id)
+          if (asst) {
+            this.$set(item, 'count', asst.assts.length)
+          }
+        })
+        this.table.list.splice()
+      },
+      createRelation() {
+        this.slider.title = this.$t('新建关联类型')
+        this.slider.isReadOnly = false
+        this.slider.isEdit = false
+        this.slider.isShow = true
+      },
+      editRelation(relation) {
+        this.slider.title = this.$t('编辑关联类型')
+        this.slider.isReadOnly = false
+        this.slider.relation = relation
+        this.slider.isEdit = true
+        this.slider.isShow = true
+      },
+      deleteRelation(relation) {
+        this.$bkInfo({
+          title: this.$tc('确定删除关联类型？', relation.bk_asst_name, { name: relation.bk_asst_name }),
+          confirmFn: async () => {
+            await this.deleteAssociationType({
+              id: relation.id,
+              config: {
+                requestId: 'deleteAssociationType'
+              }
+            })
+            this.searchRelation()
+          }
+        })
+      },
+      saveRelation() {
+        this.slider.isShow = false
+        this.searchRelation()
+      },
+      handlePageChange(current) {
+        this.table.pagination.current = current
+        this.searchRelation()
+      },
+      handleSizeChange(size) {
+        this.table.pagination.limit = size
+        this.handlePageChange(1)
+      },
+      handleSortChange(sort) {
+        this.table.sort = this.$tools.getSort(sort)
+        this.searchRelation()
+      },
+      handleSliderBeforeClose() {
+        const hasChanged = Object.keys(this.$refs.relationForm.changedValues).length
+        if (hasChanged) {
+          return new Promise((resolve) => {
+            this.$bkInfo({
+              title: this.$t('确认退出'),
+              subTitle: this.$t('退出会导致未保存信息丢失'),
+              extCls: 'bk-dialog-sub-header-center',
+              confirmFn: () => {
+                this.slider.isShow = false
+                resolve(true)
+              },
+              cancelFn: () => {
+                resolve(false)
+              }
+            })
+          })
+        }
+        this.slider.isShow = false
+        return true
+      },
+      handleShowDetails(relation, event, column = {}) {
+        if (column.property === 'operation') return
+        this.slider.title = this.$t('关联类型详情')
+        this.slider.relation = relation
+        this.slider.isReadOnly = true
+        this.slider.isEdit = true
+        this.slider.isShow = true
+      }
     }
+  }
 </script>
 
-
 <style lang="scss" scoped>
+    .relation-wrapper {
+        padding: 15px 20px 0;
+    }
     .operation-box {
-        margin: 0 0 20px 0;
+        margin: 0 0 14px 0;
         font-size: 0;
+        .create-btn {
+            margin: 0 10px 0 0;
+        }
         .search-input {
             position: relative;
             display: inline-block;
-            margin-left: 10px;
             width: 300px;
-            .icon-search {
-                position: absolute;
-                top: 9px;
-                right: 10px;
-                font-size: 18px;
-                color: $cmdbBorderColor;
-            }
-            .cmdb-form-input {
-                vertical-align: middle;
-                padding-right: 36px;
-            }
         }
     }
 </style>

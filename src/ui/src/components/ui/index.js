@@ -1,10 +1,8 @@
-import Vue from 'vue'
 import businessSelector from './selector/business.vue'
 import clipboardSelector from './selector/clipboard.vue'
 import selector from './selector/selector.vue'
-import table from './table/table.vue'
-import tableSelector from './table/table-selector.vue'
-import slider from './slider/slider.vue'
+import cloudSelector from './selector/cloud.vue'
+import serviceCategorySelector from './selector/service-category.vue'
 import details from './details/details.vue'
 import form from './form/form.vue'
 import formMultiple from './form/form-multiple.vue'
@@ -19,54 +17,35 @@ import longchar from './form/longchar.vue'
 import singlechar from './form/singlechar.vue'
 import timezone from './form/timezone.vue'
 import enumeration from './form/enum.vue'
-import objuser from './form/objuser.vue'
-import associateInput from './form/associate-input.vue'
-import tree from './tree/tree.vue'
+import objuser from './form/user.vue'
 import resize from './other/resize.vue'
 import collapseTransition from './transition/collapse.js'
 import collapse from './collapse/collapse'
-const install = (Vue, opts = {}) => {
-    const components = [
-        businessSelector,
-        clipboardSelector,
-        selector,
-        table,
-        tableSelector,
-        slider,
-        details,
-        form,
-        formMultiple,
-        bool,
-        boolInput,
-        date,
-        dateRange,
-        time,
-        int,
-        float,
-        longchar,
-        singlechar,
-        timezone,
-        enumeration,
-        objuser,
-        associateInput,
-        tree,
-        resize,
-        collapseTransition,
-        collapse
-    ]
-    components.forEach(component => {
-        Vue.component(component.name, component)
-    })
-}
-
-export default {
-    install,
+import dotMenu from './dot-menu/dot-menu.vue'
+import input from './form/input.vue'
+import searchInput from './form/search-input.vue'
+import inputSelect from './selector/input-select.vue'
+import iconButton from './button/icon-button.vue'
+import tips from './other/tips.vue'
+import dialog from './dialog/dialog.vue'
+import auth from './auth/auth.vue'
+import authOption from './auth/auth-option.vue'
+import tableEmpty from './table-empty/table-empty.vue'
+import list from './form/list.vue'
+import table from './form/table.vue'
+import leaveConfirm from './dialog/leave-confirm.vue'
+import textButton from './button/link-button.vue'
+import stickyLayout from './other/sticky-layout.vue'
+import permission from './permission/embed-permission.vue'
+import routerSubview from './other/router-subview.vue'
+import organization from './form/organization.vue'
+import propertyValue from './other/property-value.vue'
+import tagInput from './tag-input/tag-input.vue'
+const install = (Vue) => {
+  const components = [
     businessSelector,
     clipboardSelector,
     selector,
-    table,
-    tableSelector,
-    slider,
     details,
     form,
     formMultiple,
@@ -82,8 +61,79 @@ export default {
     timezone,
     enumeration,
     objuser,
-    associateInput,
-    tree,
     resize,
-    collapseTransition
+    collapseTransition,
+    collapse,
+    dotMenu,
+    input,
+    searchInput,
+    inputSelect,
+    iconButton,
+    tips,
+    dialog,
+    cloudSelector,
+    serviceCategorySelector,
+    auth,
+    authOption,
+    tableEmpty,
+    list,
+    table,
+    leaveConfirm,
+    textButton,
+    stickyLayout,
+    permission,
+    routerSubview,
+    organization,
+    propertyValue,
+    tagInput
+  ]
+  components.forEach((component) => {
+    Vue.component(component.name, component)
+  })
+}
+
+export default {
+  install,
+  businessSelector,
+  clipboardSelector,
+  selector,
+  details,
+  form,
+  formMultiple,
+  bool,
+  boolInput,
+  date,
+  dateRange,
+  time,
+  int,
+  float,
+  longchar,
+  singlechar,
+  timezone,
+  enumeration,
+  objuser,
+  resize,
+  collapseTransition,
+  dotMenu,
+  input,
+  searchInput,
+  inputSelect,
+  iconButton,
+  tips,
+  dialog,
+  cloudSelector,
+  serviceCategorySelector,
+  auth,
+  authOption,
+  tableEmpty,
+  list,
+  table,
+  leaveConfirm,
+  textButton,
+  stickyLayout,
+  permission,
+  routerSubview,
+  organization,
+  propertyValue,
+  tagInput
 }

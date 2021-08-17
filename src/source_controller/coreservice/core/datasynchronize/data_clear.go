@@ -12,51 +12,45 @@
 package datasynchronize
 
 import (
-	"strings"
-
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
 	"configcenter/src/common/condition"
+	"configcenter/src/common/http/rest"
 	"configcenter/src/common/metadata"
-	"configcenter/src/source_controller/coreservice/core"
-	"configcenter/src/storage/dal"
+	"configcenter/src/common/util"
+	"configcenter/src/storage/driver/mongodb"
 )
 
 type clearDataInterface interface {
-	clearData(ctx core.ContextParams)
+	clearData(kit *rest.Kit)
 }
 
 type clearData struct {
-	dbProxy dal.RDB
-	input   *metadata.SynchronizeClearDataParameter
+	input *metadata.SynchronizeClearDataParameter
 }
 
-func NewClearData(dbProxy dal.RDB, input *metadata.SynchronizeClearDataParameter) clearDataInterface {
+func NewClearData(input *metadata.SynchronizeClearDataParameter) clearDataInterface {
 	return &clearData{
-		dbProxy: dbProxy,
-		input:   input,
+		input: input,
 	}
 }
 
-func (c *clearData) clearData(ctx core.ContextParams) {
-	versionKey := getSynchronize(common.MetadataField, common.MetaDataSynchronizeVersionField)
-	flagKey := getSynchronize(common.MetadataField, common.MetaDataSynchronizeFlagField)
+func (c *clearData) clearData(kit *rest.Kit) {
+
+	versionKey := util.BuildMongoSyncItemField(common.MetaDataSynchronizeVersionField)
+	flagKey := util.BuildMongoSyncItemField(common.MetaDataSynchronizeFlagField)
 
 	delConditionParse := condition.CreateCondition()
 	delConditionParse.Field(versionKey).Lt(c.input.Version)
 	delConditionParse.Field(flagKey).Eq(c.input.SynchronizeFlag)
 	deleteConditon := delConditionParse.ToMapStr()
 
-	conditionParse := condition.CreateCondition()
-	conditionParse.Field(versionKey).Eq(c.input.Version)
-	conditionParse.Field(flagKey).Eq(c.input.SynchronizeFlag)
-	queryCondition := conditionParse.ToMapStr()
-
+	blog.V(5).Infof(" clearData condition:%#v, rid:%s", deleteConditon, kit.Rid)
 	tableNameArr := common.AllTables
 	for _, tableName := range tableNameArr {
-		cnt, err := c.dbProxy.Table(tableName).Find(queryCondition).Count(ctx)
+		cnt, err := mongodb.Client().Table(tableName).Find(deleteConditon).Count(kit.Ctx)
 		if err != nil {
-			blog.Errorf("clearData  find %s table row error, err:%s,rid:%s", tableName, err.Error(), ctx.ReqID)
+			blog.Warnf("clearData  find %s table row error, err:%s, condition:%#v, rid:%s", tableName, err.Error(), deleteConditon, kit.Rid)
 			continue
 		}
 		if cnt <= 0 {
@@ -64,13 +58,9 @@ func (c *clearData) clearData(ctx core.ContextParams) {
 			continue
 		}
 
-		err = c.dbProxy.Table(tableName).Delete(ctx, deleteConditon)
+		err = mongodb.Client().Table(tableName).Delete(kit.Ctx, deleteConditon)
 		if err != nil {
-			blog.Errorf("clearData  delete %s table row error, err:%s,rid:%s", tableName, err.Error(), ctx.ReqID)
+			blog.Errorf("clearData  delete %s table row error, err:%s, condition:%#v, rid:%s", tableName, err.Error(), deleteConditon, kit.Rid)
 		}
 	}
-}
-
-func getSynchronize(key ...string) string {
-	return strings.Join(key, ".")
 }

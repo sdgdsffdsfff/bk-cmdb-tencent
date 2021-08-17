@@ -14,20 +14,22 @@ package instance
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
+	"configcenter/src/common/blog"
+	"configcenter/src/common/errors"
 	"configcenter/src/common/metadata"
+	"configcenter/src/common/util"
 )
 
 func (inst *instance) CreateInstance(ctx context.Context, h http.Header, objID string, input *metadata.CreateModelInstance) (resp *metadata.CreatedOneOptionResult, err error) {
 	resp = new(metadata.CreatedOneOptionResult)
-	subPath := fmt.Sprintf("/create/model/%s/instance", objID)
+	subPath := "/create/model/%s/instance"
 
 	err = inst.client.Post().
 		WithContext(ctx).
 		Body(input).
-		SubResource(subPath).
+		SubResourcef(subPath, objID).
 		WithHeaders(h).
 		Do().
 		Into(resp)
@@ -36,12 +38,12 @@ func (inst *instance) CreateInstance(ctx context.Context, h http.Header, objID s
 
 func (inst *instance) CreateManyInstance(ctx context.Context, h http.Header, objID string, input *metadata.CreateManyModelInstance) (resp *metadata.CreatedManyOptionResult, err error) {
 	resp = new(metadata.CreatedManyOptionResult)
-	subPath := fmt.Sprintf("/createmany/model/%s/instance", objID)
+	subPath := "/createmany/model/%s/instance"
 
 	err = inst.client.Post().
 		WithContext(ctx).
 		Body(input).
-		SubResource(subPath).
+		SubResourcef(subPath, objID).
 		WithHeaders(h).
 		Do().
 		Into(resp)
@@ -50,12 +52,12 @@ func (inst *instance) CreateManyInstance(ctx context.Context, h http.Header, obj
 
 func (inst *instance) SetManyInstance(ctx context.Context, h http.Header, objID string, input *metadata.SetManyModelInstance) (resp *metadata.SetOptionResult, err error) {
 	resp = new(metadata.SetOptionResult)
-	subPath := fmt.Sprintf("/setmany/model/%s/instances", objID)
+	subPath := "/setmany/model/%s/instances"
 
 	err = inst.client.Post().
 		WithContext(ctx).
 		Body(input).
-		SubResource(subPath).
+		SubResourcef(subPath, objID).
 		WithHeaders(h).
 		Do().
 		Into(resp)
@@ -64,12 +66,12 @@ func (inst *instance) SetManyInstance(ctx context.Context, h http.Header, objID 
 
 func (inst *instance) UpdateInstance(ctx context.Context, h http.Header, objID string, input *metadata.UpdateOption) (resp *metadata.UpdatedOptionResult, err error) {
 	resp = new(metadata.UpdatedOptionResult)
-	subPath := fmt.Sprintf("/update/model/%s/instance", objID)
+	subPath := "/update/model/%s/instance"
 
 	err = inst.client.Put().
 		WithContext(ctx).
 		Body(input).
-		SubResource(subPath).
+		SubResourcef(subPath, objID).
 		WithHeaders(h).
 		Do().
 		Into(resp)
@@ -78,12 +80,12 @@ func (inst *instance) UpdateInstance(ctx context.Context, h http.Header, objID s
 
 func (inst *instance) ReadInstance(ctx context.Context, h http.Header, objID string, input *metadata.QueryCondition) (resp *metadata.QueryConditionResult, err error) {
 	resp = new(metadata.QueryConditionResult)
-	subPath := fmt.Sprintf("/read/model/%s/instances", objID)
+	subPath := "/read/model/%s/instances"
 
 	err = inst.client.Post().
 		WithContext(ctx).
 		Body(input).
-		SubResource(subPath).
+		SubResourcef(subPath, objID).
 		WithHeaders(h).
 		Do().
 		Into(resp)
@@ -92,12 +94,12 @@ func (inst *instance) ReadInstance(ctx context.Context, h http.Header, objID str
 
 func (inst *instance) DeleteInstance(ctx context.Context, h http.Header, objID string, input *metadata.DeleteOption) (resp *metadata.DeletedOptionResult, err error) {
 	resp = new(metadata.DeletedOptionResult)
-	subPath := fmt.Sprintf("/delete/model/%s/instance", objID)
+	subPath := "/delete/model/%s/instance"
 
 	err = inst.client.Delete().
 		WithContext(ctx).
 		Body(input).
-		SubResource(subPath).
+		SubResourcef(subPath, objID).
 		WithHeaders(h).
 		Do().
 		Into(resp)
@@ -106,14 +108,37 @@ func (inst *instance) DeleteInstance(ctx context.Context, h http.Header, objID s
 
 func (inst *instance) DeleteInstanceCascade(ctx context.Context, h http.Header, objID string, input *metadata.DeleteOption) (resp *metadata.DeletedOptionResult, err error) {
 	resp = new(metadata.DeletedOptionResult)
-	subPath := fmt.Sprintf("/delete/model/%s/instance/cascade", objID)
+	subPath := "/delete/model/%s/instance/cascade"
 
 	err = inst.client.Delete().
 		WithContext(ctx).
 		Body(input).
-		SubResource(subPath).
+		SubResourcef(subPath, objID).
 		WithHeaders(h).
 		Do().
 		Into(resp)
 	return
+}
+
+//  ReadInstanceStruct 按照结构体返回实例数据
+func (inst *instance) ReadInstanceStruct(ctx context.Context, h http.Header, objID string,
+	input *metadata.QueryCondition, result interface{}) errors.CCErrorCoder {
+
+	rid := util.GetHTTPCCRequestID(h)
+	subPath := "/read/model/%s/instances"
+
+	err := inst.client.Post().
+		WithContext(ctx).
+		Body(input).
+		SubResourcef(subPath, objID).
+		WithHeaders(h).
+		Do().
+		Into(result)
+
+	if err != nil {
+		blog.ErrorJSON("ReadInstanceStruct failed, http request failed, err: %s, filter: %s, rid: %s", err, input, rid)
+		return errors.CCHttpError
+	}
+
+	return nil
 }

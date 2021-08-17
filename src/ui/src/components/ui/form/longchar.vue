@@ -1,54 +1,88 @@
 <template>
-    <div class="cmdb-form form-longchar">
-        <input class="cmdb-form-input form-longchar-input" type="text"
-            :placeholder="$t('Form[\'请输入长字符\']')"
-            :maxlength="maxlength"
-            :value="value"
-            :disabled="disabled"
-            @input="handleInput($event)"
-            @change="handleChange">
-    </div>
+  <bk-input
+    v-model="localValue"
+    :placeholder="placeholder || $t('请输入长字符')"
+    :disabled="disabled"
+    :type="'textarea'"
+    :rows="row"
+    :maxlength="maxlength"
+    :clearable="!disabled"
+    @blur="handleBlur"
+    @enter="handleEnter"
+    @on-change="handleChange">
+  </bk-input>
 </template>
 
 <script>
-    export default {
-        name: 'cmdb-form-longchar',
-        props: {
-            value: {
-                default: ''
-            },
-            disabled: {
-                type: Boolean,
-                default: false
-            },
-            maxlength: {
-                type: Number,
-                default: 2000
-            }
+  export default {
+    name: 'cmdb-form-longchar',
+    props: {
+      value: {
+        type: [String, Number],
+        default: ''
+      },
+      disabled: {
+        type: Boolean,
+        default: false
+      },
+      maxlength: {
+        type: Number,
+        default: 2000
+      },
+      minlength: {
+        type: Number,
+        default: 2000
+      },
+      row: {
+        type: Number,
+        default: 3
+      },
+      placeholder: {
+        type: String,
+        default: ''
+      }
+    },
+    computed: {
+      localValue: {
+        get() {
+          return (this.value === null || this.value === undefined) ? '' : this.value
         },
-        methods: {
-            handleInput (event) {
-                let value = event.target.value.trim()
-                this.$emit('input', value)
-            },
-            handleChange () {
-                this.$emit('on-change', this.value)
-            }
+        set(value) {
+          this.$emit('input', value)
         }
+      }
+    },
+    methods: {
+      handleChange(value) {
+        this.$emit('on-change', value)
+      },
+      handleEnter(value) {
+        this.$emit('enter', value)
+      },
+      handleBlur(value) {
+        this.$emit('blur', value)
+      },
+      focus() {
+        this.$el.querySelector('textarea').focus()
+      }
     }
+  }
 </script>
 
 <style lang="scss" scoped>
-    .form-longchar-input {
-        height: 36px;
-        width: 100%;
-        padding: 0 10px;
-        background-color: #fff;
-        border: 1px solid $cmdbBorderColor;
-        font-size: 14px;
-        outline: none;
-        &:focus{
-            border-color: $cmdbBorderFocusColor;
+    .bk-form-control {
+        /deep/ .bk-textarea-wrapper {
+            .bk-form-textarea {
+                min-height: auto !important;
+                padding: 5px 10px 8px;
+                @include scrollbar-y;
+                &.textarea-maxlength {
+                    margin-bottom: 0 !important;
+                }
+            }
+        }
+        /deep/ .bk-limit-box {
+            display: none !important
         }
     }
 </style>

@@ -5,28 +5,17 @@ import messages from './lang/messages'
 
 Vue.use(VueI18n)
 
-const languageMaps = {
-    'zh_cn': 'zh_CN',
-    'zh-cn': 'zh_CN',
-    'zh': 'zh_CN'
-}
-
-let locale = Cookies.get('blueking_language') || 'zh_CN'
-
-locale = languageMaps.hasOwnProperty(locale) ? languageMaps[locale] : locale
-
-if (locale === 'en') {
-    document.title = 'CMDB | BlueKing'
-}
+const locale = Cookies.get('blueking_language') === 'en' ? 'en' : 'zh_CN'
 
 const i18n = new VueI18n({
-    locale,
-    fallbackLocale: 'zh_CN',
-    messages,
-    missing (locale, path) {
-        const parsedPath = i18n._path.parsePath(path)
-        return parsedPath[parsedPath.length - 1]
-    }
+  locale,
+  fallbackLocale: 'zh_CN',
+  messages,
+  missing(locale, path) {
+    // eslint-disable-next-line no-underscore-dangle
+    const parsedPath = i18n._path.parsePath(path)
+    return parsedPath[parsedPath.length - 1]
+  }
 })
 
 export const language = locale

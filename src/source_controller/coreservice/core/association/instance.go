@@ -13,135 +13,216 @@
 package association
 
 import (
+	"fmt"
+	"time"
+
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
 	"configcenter/src/common/errors"
+	"configcenter/src/common/http/rest"
+	"configcenter/src/common/lock"
 	"configcenter/src/common/mapstr"
 	"configcenter/src/common/metadata"
 	"configcenter/src/common/universalsql/mongo"
-	"configcenter/src/source_controller/coreservice/core"
-	"configcenter/src/storage/dal"
+	"configcenter/src/common/util"
+	"configcenter/src/storage/driver/mongodb"
+	driverRedis "configcenter/src/storage/driver/redis"
 )
 
 type associationInstance struct {
-	dbProxy dal.RDB
 	*associationKind
 	*associationModel
-	dependent OperationDependences
+	dependent OperationDependencies
 }
 
-func (m *associationInstance) isExists(ctx core.ContextParams, instID, asstInstID int64, objAsstID string, meta metadata.Metadata) (origin *metadata.InstAsst, exists bool, err error) {
+func (m *associationInstance) isExists(kit *rest.Kit, instID, asstInstID int64, objAsstID string, bizID int64) (origin *metadata.InstAsst, exists bool, err error) {
 	cond := mongo.NewCondition()
 	origin = &metadata.InstAsst{}
 	cond.Element(
 		&mongo.Eq{Key: common.BKInstIDField, Val: instID},
 		&mongo.Eq{Key: common.BKAsstInstIDField, Val: asstInstID},
 		&mongo.Eq{Key: common.AssociationObjAsstIDField, Val: objAsstID})
-	isExsit, bizID := meta.Label.Get(common.BKAppIDField)
-	if isExsit {
-		_, metaCond := cond.Embed(metadata.BKMetadata)
-		_, lableCond := metaCond.Embed(metadata.BKLabel)
-		lableCond.Element(&mongo.Eq{Key: common.BKAppIDField, Val: bizID})
+	if bizID > 0 {
+		cond.Element(&mongo.Eq{Key: common.BKAppIDField, Val: bizID})
 	}
 
-	err = m.dbProxy.Table(common.BKTableNameInstAsst).Find(cond.ToMapStr()).One(ctx, origin)
-	if m.dbProxy.IsNotFoundError(err) {
-		return origin, !m.dbProxy.IsNotFoundError(err), nil
+	err = mongodb.Client().Table(common.BKTableNameInstAsst).Find(cond.ToMapStr()).One(kit.Ctx, origin)
+	if mongodb.Client().IsNotFoundError(err) {
+		return origin, !mongodb.Client().IsNotFoundError(err), nil
 	}
-	return origin, !m.dbProxy.IsNotFoundError(err), err
+	return origin, !mongodb.Client().IsNotFoundError(err), err
 }
 
-func (m *associationInstance) instCount(ctx core.ContextParams, cond mapstr.MapStr) (cnt uint64, err error) {
-	innerCnt, err := m.dbProxy.Table(common.BKTableNameInstAsst).Find(cond).Count(ctx)
+func (m *associationInstance) instCount(kit *rest.Kit, cond mapstr.MapStr) (cnt uint64, err error) {
+	innerCnt, err := mongodb.Client().Table(common.BKTableNameInstAsst).Find(cond).Count(kit.Ctx)
 	return innerCnt, err
 }
 
-func (m *associationInstance) searchInstanceAssociation(ctx core.ContextParams, inputParam metadata.QueryCondition) (results []metadata.InstAsst, err error) {
+func (m *associationInstance) searchInstanceAssociation(kit *rest.Kit, inputParam metadata.QueryCondition) (results []metadata.InstAsst, err error) {
 	results = []metadata.InstAsst{}
-	instHandler := m.dbProxy.Table(common.BKTableNameInstAsst).Find(inputParam.Condition).Fields(inputParam.Fields...)
-	for _, sort := range inputParam.SortArr {
-		fileld := sort.Field
-		if sort.IsDsc {
-			fileld = "-" + fileld
-		}
-		instHandler = instHandler.Sort(fileld)
-	}
-	err = instHandler.Start(uint64(inputParam.Limit.Offset)).Limit(uint64(inputParam.Limit.Limit)).All(ctx, &results)
+	instHandler := mongodb.Client().Table(common.BKTableNameInstAsst).Find(inputParam.Condition).Fields(inputParam.Fields...)
+	err = instHandler.Start(uint64(inputParam.Page.Start)).Limit(uint64(inputParam.Page.Limit)).Sort(inputParam.Page.Sort).All(kit.Ctx, &results)
 	return results, err
 }
 
-func (m *associationInstance) countInstanceAssociation(ctx core.ContextParams, cond mapstr.MapStr) (count uint64, err error) {
-	count, err = m.dbProxy.Table(common.BKTableNameInstAsst).Find(cond).Count(ctx)
+func (m *associationInstance) countInstanceAssociation(kit *rest.Kit, cond mapstr.MapStr) (count uint64, err error) {
+	count, err = mongodb.Client().Table(common.BKTableNameInstAsst).Find(cond).Count(kit.Ctx)
 
 	return count, err
 }
 
-func (m *associationInstance) save(ctx core.ContextParams, asstInst metadata.InstAsst) (id uint64, err error) {
+func (m *associationInstance) save(kit *rest.Kit, asstInst metadata.InstAsst) (id uint64, err error) {
 
-	id, err = m.dbProxy.NextSequence(ctx, common.BKTableNameInstAsst)
+	id, err = mongodb.Client().NextSequence(kit.Ctx, common.BKTableNameInstAsst)
 	if err != nil {
-		return id, ctx.Error.New(common.CCErrObjectDBOpErrno, err.Error())
+		return id, kit.CCError.New(common.CCErrObjectDBOpErrno, err.Error())
 	}
 
 	asstInst.ID = int64(id)
+	asstInst.OwnerID = kit.SupplierAccount
 
-	err = m.dbProxy.Table(common.BKTableNameInstAsst).Insert(ctx, asstInst)
+	err = mongodb.Client().Table(common.BKTableNameInstAsst).Insert(kit.Ctx, asstInst)
 	return id, err
 }
 
-func (m *associationInstance) CreateOneInstanceAssociation(ctx core.ContextParams, inputParam metadata.CreateOneInstanceAssociation) (*metadata.CreateOneDataResult, error) {
-	inputParam.Data.OwnerID = ctx.SupplierAccount
-	_, exists, err := m.isExists(ctx, inputParam.Data.InstID, inputParam.Data.AsstInstID, inputParam.Data.ObjectAsstID, inputParam.Data.Metadata)
+func genAssoInstLockKey(id int64, objectAsstID string) string {
+	lockKey := fmt.Sprintf("%d_%s", id, objectAsstID)
+	return lockKey
+}
+
+func (m *associationInstance) CreateOneInstanceAssociation(kit *rest.Kit, inputParam metadata.CreateOneInstanceAssociation) (*metadata.CreateOneDataResult, error) {
+	inputParam.Data.OwnerID = kit.SupplierAccount
+	_, exists, err := m.isExists(kit, inputParam.Data.InstID, inputParam.Data.AsstInstID, inputParam.Data.ObjectAsstID, inputParam.Data.BizID)
 	if nil != err {
-		blog.Errorf("check instance (%#v)is duplicated error", inputParam.Data)
+		blog.Errorf("check instance (%#v)is duplicated error, rid: %s", inputParam.Data, kit.Rid)
 		return nil, err
 	}
 	if exists {
-		blog.Errorf("association instance (%#v)is duplicated", inputParam.Data)
-		return nil, ctx.Error.Errorf(common.CCErrCommDuplicateItem, "")
+		blog.Errorf("association instance (%#v)is duplicated, rid: %s", inputParam.Data, kit.Rid)
+		return nil, kit.CCError.Errorf(common.CCErrCommDuplicateItem, "association")
 	}
-	//check association kind
+	// check association kind
 	cond := mongo.NewCondition()
 	cond.Element(&mongo.Eq{Key: common.AssociationObjAsstIDField, Val: inputParam.Data.ObjectAsstID})
-	_, exists, err = m.associationModel.isExists(ctx, cond)
+	_, exists, err = m.associationModel.isExists(kit, cond)
 	if nil != err {
-		blog.Errorf("check asst kind(%#v)is not exist", inputParam.Data.ObjectAsstID)
+		blog.Errorf("check asst kind(%#v)is not exist, rid: %s", inputParam.Data.ObjectAsstID, kit.Rid)
 		return nil, err
 	}
 	if !exists {
-		blog.Errorf("association asst kind(%#v)is not exist", inputParam.Data.ObjectAsstID)
-		return nil, ctx.Error.Error(common.CCErrorTopoAsstKindIsNotExist)
+		blog.Errorf("association asst kind(%#v)is not exist, rid: %s", inputParam.Data.ObjectAsstID, kit.Rid)
+		return nil, kit.CCError.Error(common.CCErrorTopoAsstKindIsNotExist)
 	}
-	//check association inst
-	exists, err = m.dependent.IsInstanceExist(ctx, inputParam.Data.ObjectID, uint64(inputParam.Data.InstID))
-	if nil != err {
-		return nil, err
-	}
-
-	if !exists {
-		blog.Errorf("inst to asst is not exist objid(%#v), instid(%#v)", inputParam.Data.ObjectID, inputParam.Data.InstID)
-		return nil, ctx.Error.Error(common.CCErrorAsstInstIsNotExist)
-	}
-	//check inst to asst
-	exists, err = m.dependent.IsInstanceExist(ctx, inputParam.Data.AsstObjectID, uint64(inputParam.Data.AsstInstID))
+	// check association inst
+	exists, err = m.dependent.IsInstanceExist(kit, inputParam.Data.ObjectID, uint64(inputParam.Data.InstID))
 	if nil != err {
 		return nil, err
 	}
 
 	if !exists {
-		blog.Errorf("asst inst is not exist objid(%#v), instid(%#v)", inputParam.Data.ObjectID, inputParam.Data.InstID)
-		return nil, ctx.Error.Error(common.CCErrorInstToAsstIsNotExist)
+		blog.Errorf("inst to asst is not exist objid(%#v), instid(%#v), rid: %s", inputParam.Data.ObjectID, inputParam.Data.InstID, kit.Rid)
+		return nil, kit.CCError.Error(common.CCErrorAsstInstIsNotExist)
 	}
-	id, err := m.save(ctx, inputParam.Data)
-	return &metadata.CreateOneDataResult{Created: metadata.CreatedDataResult{ID: id}}, err
+	// check inst to asst
+	exists, err = m.dependent.IsInstanceExist(kit, inputParam.Data.AsstObjectID, uint64(inputParam.Data.AsstInstID))
+	if nil != err {
+		return nil, err
+	}
+
+	if !exists {
+		blog.Errorf("asst inst is not exist objid(%#v), instid(%#v), rid: %s", inputParam.Data.ObjectID, inputParam.Data.InstID, kit.Rid)
+		return nil, kit.CCError.Error(common.CCErrorInstToAsstIsNotExist)
+	}
+
+	checkAssoCond := mongo.NewCondition()
+	checkAssoCond.Element(&mongo.Eq{Key: common.AssociationObjAsstIDField, Val: inputParam.Data.ObjectAsstID})
+	checkAssoCond.Element(&mongo.Eq{Key: common.BKOwnerIDField, Val: kit.SupplierAccount})
+	assoItems, err := m.search(kit, checkAssoCond)
+	if err != nil {
+		blog.ErrorJSON("search associations with condition: %s failed, err: %s, rid: %s",
+			checkAssoCond.ToMapStr(), err.Error(), kit.Rid)
+		return nil, err
+	}
+
+	if len(assoItems) != 1 {
+		blog.ErrorJSON("association with cond: %s not exist, rid: %s", checkAssoCond.ToMapStr(), kit.Rid)
+		return nil, kit.CCError.CCErrorf(common.CCERrrCoreServiceConcurrent)
+	}
+
+	mappingType := assoItems[0].Mapping
+	switch mappingType {
+	case metadata.OneToOneMapping:
+		mlocker := lock.NewMLocker(driverRedis.Client())
+		instkey := genAssoInstLockKey(inputParam.Data.InstID, inputParam.Data.ObjectAsstID)
+		asstInstkey := genAssoInstLockKey(inputParam.Data.AsstInstID, inputParam.Data.ObjectAsstID)
+		locked, err := mlocker.MLock(kit.Rid, 10, time.Minute, lock.StrFormat(instkey), lock.StrFormat(asstInstkey))
+		if err != nil {
+			blog.Errorf("obtain lock failed. err: %v, rid: %s", err, kit.Rid)
+			return nil, kit.CCError.CCErrorf(common.CCERrrCoreServiceConcurrent)
+		}
+
+		if !locked {
+			blog.Errorf("create one to one inst association, but get lock failed, rid: %s", kit.Rid)
+			return nil, kit.CCError.CCErrorf(common.CCERrrCoreServiceConcurrent)
+		}
+
+		defer func() {
+			if err := mlocker.MUnlock(); err != nil {
+				blog.Errorf("release lock failed, err: %v, rid: %s", err, kit.Rid)
+			}
+		}()
+
+		id, err := m.save(kit, inputParam.Data)
+		if err != nil {
+			blog.Errorf("create one to one instance association failed, err: %v, rid: %s", err, kit.Rid)
+			return nil, err
+		}
+
+		return &metadata.CreateOneDataResult{Created: metadata.CreatedDataResult{ID: id}}, nil
+
+	case metadata.OneToManyMapping:
+		locker := lock.NewLocker(driverRedis.Client())
+		asstInstManyKey := genAssoInstLockKey(inputParam.Data.AsstInstID, inputParam.Data.ObjectAsstID)
+		locked, err := locker.Lock(lock.StrFormat(asstInstManyKey), time.Minute)
+		if err != nil {
+			blog.Errorf("create one to many instance association, get lock failed, err: %v, rid: %s", kit.Rid)
+			return nil, kit.CCError.CCErrorf(common.CCERrrCoreServiceConcurrent)
+		}
+		if !locked {
+			blog.Errorf("create one to many instance association, but get lock failed, rid: %s", kit.Rid)
+			return nil, kit.CCError.CCErrorf(common.CCERrrCoreServiceConcurrent)
+		}
+
+		defer func() {
+			if err := locker.Unlock(); err != nil {
+				blog.Errorf("release lock failed, err: %v,rid: %s", err, kit.Rid)
+			}
+		}()
+
+		id, err := m.save(kit, inputParam.Data)
+		if err != nil {
+			blog.Errorf("create one to one instance association failed, err: %v, rid: %s", err, kit.Rid)
+			return nil, err
+		}
+
+		return &metadata.CreateOneDataResult{Created: metadata.CreatedDataResult{ID: id}}, nil
+
+	default:
+		id, err := m.save(kit, inputParam.Data)
+		if err != nil {
+			blog.Errorf("create one to one instance association failed, err: %v, rid: %s", err, kit.Rid)
+			return nil, err
+		}
+
+		return &metadata.CreateOneDataResult{Created: metadata.CreatedDataResult{ID: id}}, nil
+	}
 }
-
-func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextParams, inputParam metadata.CreateManyInstanceAssociation) (*metadata.CreateManyDataResult, error) {
+func (m *associationInstance) CreateManyInstanceAssociation(kit *rest.Kit, inputParam metadata.CreateManyInstanceAssociation) (*metadata.CreateManyDataResult, error) {
 	dataResult := &metadata.CreateManyDataResult{}
 	for itemIdx, item := range inputParam.Datas {
-		item.OwnerID = ctx.SupplierAccount
+		item.OwnerID = kit.SupplierAccount
 		//check is exist
-		_, exists, err := m.isExists(ctx, item.InstID, item.AsstInstID, item.ObjectAsstID, item.Metadata)
+		_, exists, err := m.isExists(kit, item.InstID, item.AsstInstID, item.ObjectAsstID, item.BizID)
 		if nil != err {
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
 				Message:     err.Error(),
@@ -157,7 +238,7 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 			continue
 		}
 		//check asst kind
-		_, exists, err = m.associationKind.isExists(ctx, item.ObjectAsstID)
+		_, exists, err = m.associationKind.isExists(kit, item.ObjectAsstID)
 		if nil != err {
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
 				Message:     err.Error(),
@@ -168,8 +249,9 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 			continue
 		}
 		if !exists {
+			blog.InfoJSON("CreateManyInstanceAssociation error. obj:%s,rid:%s", item.ObjectAsstID, kit.Rid)
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
-				Message:     ctx.Error.Error(common.CCErrorAsstInstIsNotExist).Error(),
+				Message:     kit.CCError.Error(common.CCErrorAsstInstIsNotExist).Error(),
 				Code:        int64(common.CCErrorAsstInstIsNotExist),
 				Data:        item,
 				OriginIndex: int64(itemIdx),
@@ -177,7 +259,7 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 			continue
 		}
 		//check asst inst exist
-		exists, err = m.dependent.IsInstanceExist(ctx, item.ObjectID, uint64(item.InstID))
+		exists, err = m.dependent.IsInstanceExist(kit, item.ObjectID, uint64(item.InstID))
 		if nil != err {
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
 				Message:     err.Error(),
@@ -190,7 +272,7 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 
 		if !exists {
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
-				Message:     ctx.Error.Error(common.CCErrorAsstInstIsNotExist).Error(),
+				Message:     kit.CCError.Error(common.CCErrorAsstInstIsNotExist).Error(),
 				Code:        int64(common.CCErrorAsstInstIsNotExist),
 				Data:        item,
 				OriginIndex: int64(itemIdx),
@@ -198,7 +280,7 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 			continue
 		}
 		//check  inst to asst exist
-		exists, err = m.dependent.IsInstanceExist(ctx, item.AsstObjectID, uint64(item.AsstInstID))
+		exists, err = m.dependent.IsInstanceExist(kit, item.AsstObjectID, uint64(item.AsstInstID))
 		if nil != err {
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
 				Message:     err.Error(),
@@ -211,7 +293,7 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 
 		if !exists {
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
-				Message:     ctx.Error.Error(common.CCErrorInstToAsstIsNotExist).Error(),
+				Message:     kit.CCError.Error(common.CCErrorInstToAsstIsNotExist).Error(),
 				Code:        int64(common.CCErrorInstToAsstIsNotExist),
 				Data:        item,
 				OriginIndex: int64(itemIdx),
@@ -219,7 +301,7 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 			continue
 		}
 		//save asst inst
-		id, err := m.save(ctx, item)
+		id, err := m.save(kit, item)
 		if nil != err {
 			dataResult.Exceptions = append(dataResult.Exceptions, metadata.ExceptionResult{
 				Message:     err.Error(),
@@ -239,28 +321,25 @@ func (m *associationInstance) CreateManyInstanceAssociation(ctx core.ContextPara
 	return dataResult, nil
 }
 
-func (m *associationInstance) SearchInstanceAssociation(ctx core.ContextParams, inputParam metadata.QueryCondition) (*metadata.QueryResult, error) {
-	condition, err := mongo.NewConditionFromMapStr(inputParam.Condition)
+func (m *associationInstance) SearchInstanceAssociation(kit *rest.Kit, inputParam metadata.QueryCondition) (*metadata.QueryResult, error) {
+	inputParam.Condition = util.SetQueryOwner(inputParam.Condition, kit.SupplierAccount)
+	instAsstItems, err := m.searchInstanceAssociation(kit, inputParam)
 	if nil != err {
-		blog.Errorf("parse conditon  error [%#v]", err)
-		return &metadata.QueryResult{}, err
-	}
-	ownerIDArr := []string{ctx.SupplierAccount, common.BKDefaultOwnerID}
-	condition.Element(&mongo.In{Key: common.BKOwnerIDField, Val: ownerIDArr})
-	inputParam.Condition = condition.ToMapStr()
-	instAsstItems, err := m.searchInstanceAssociation(ctx, inputParam)
-	if nil != err {
-		blog.Errorf("search inst association array err [%#v]", err)
+		blog.Errorf("search inst association array err [%#v], rid: %s", err, kit.Rid)
 		return &metadata.QueryResult{}, err
 	}
 
 	dataResult := &metadata.QueryResult{}
-	dataResult.Count, err = m.countInstanceAssociation(ctx, inputParam.Condition)
-	dataResult.Info = make([]mapstr.MapStr, 0)
-	if nil != err {
-		blog.Errorf("search inst association count err [%#v]", err)
-		return &metadata.QueryResult{}, err
+	// the InstAsst number will be counted by default.
+	if !inputParam.DisableCounter {
+		count, err := m.countInstanceAssociation(kit, inputParam.Condition)
+		if nil != err {
+			blog.Errorf("search inst association count err [%#v], rid: %s", err, kit.Rid)
+			return &metadata.QueryResult{}, err
+		}
+		dataResult.Count = count
 	}
+	dataResult.Info = make([]mapstr.MapStr, 0)
 	for _, item := range instAsstItems {
 		dataResult.Info = append(dataResult.Info, mapstr.NewFromStruct(item, "field"))
 	}
@@ -268,17 +347,17 @@ func (m *associationInstance) SearchInstanceAssociation(ctx core.ContextParams, 
 	return dataResult, nil
 }
 
-func (m *associationInstance) DeleteInstanceAssociation(ctx core.ContextParams, inputParam metadata.DeleteOption) (*metadata.DeletedCount, error) {
-	inputParam.Condition.Set(common.BKOwnerIDField, ctx.SupplierAccount)
-	cnt, err := m.instCount(ctx, inputParam.Condition)
+func (m *associationInstance) DeleteInstanceAssociation(kit *rest.Kit, inputParam metadata.DeleteOption) (*metadata.DeletedCount, error) {
+	inputParam.Condition = util.SetModOwner(inputParam.Condition, kit.SupplierAccount)
+	cnt, err := m.instCount(kit, inputParam.Condition)
 	if nil != err {
-		blog.Errorf("delete inst association get inst [%#v] count err [%#v]", inputParam.Condition, err)
+		blog.Errorf("delete inst association get inst [%#v] count err [%#v], rid: %s", inputParam.Condition, err, kit.Rid)
 		return &metadata.DeletedCount{}, err
 	}
 
-	err = m.dbProxy.Table(common.BKTableNameInstAsst).Delete(ctx, inputParam.Condition)
+	err = mongodb.Client().Table(common.BKTableNameInstAsst).Delete(kit.Ctx, inputParam.Condition)
 	if nil != err {
-		blog.Errorf("delete inst association [%#v] err [%#v]", inputParam.Condition, err)
+		blog.Errorf("delete inst association [%#v] err [%#v], rid: %s", inputParam.Condition, err, kit.Rid)
 		return &metadata.DeletedCount{}, err
 	}
 	return &metadata.DeletedCount{Count: cnt}, nil

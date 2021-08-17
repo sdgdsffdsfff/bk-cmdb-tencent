@@ -1,18 +1,11 @@
 <template>
-    <div class="error-layout">
-        <div class="error-info">
-            <img src="../../assets/images/error.png">
-            <p class="text">系统出现异常, 请记录下错误场景并与开发人员联系, 谢谢!</p>
-        </div>
+  <div class="error-layout">
+    <div class="error-info">
+      <img src="../../assets/images/error.png">
+      <p class="text">{{$t('系统出现异常，请记录下错误场景并与开发人员联系，谢谢')}}</p>
     </div>
+  </div>
 </template>
-<script>
-    export default {
-        created () {
-            this.$store.commit('setHeaderTitle', '')
-        }
-    }
-</script>
 <style lang="scss" scoped>
     .error-layout{
         height: 100%;

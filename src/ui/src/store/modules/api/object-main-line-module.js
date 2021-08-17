@@ -8,6 +8,8 @@
  * See the License for the specific language governing permissions and limitations under the License.
  */
 
+/* eslint-disable no-unused-vars */
+
 import $http from '@/api'
 
 const state = {
@@ -19,7 +21,7 @@ const getters = {
 }
 
 const actions = {
-    /**
+  /**
      * 添加模型主关联
      * @param {Function} commit store commit mutation hander
      * @param {Object} state store state
@@ -27,11 +29,11 @@ const actions = {
      * @param {Object} params 参数
      * @return {promises} promises 对象
      */
-    createMainlineObject ({ commit, state, dispatch }, { params }) {
-        return $http.post(`create/topomodelmainline`, params)
-    },
+  createMainlineObject({ commit, state, dispatch }, { params }) {
+    return $http.post('create/topomodelmainline', params)
+  },
 
-    /**
+  /**
      * 删除模型主关联
      * @param {Function} commit store commit mutation hander
      * @param {Object} state store state
@@ -40,22 +42,22 @@ const actions = {
      * @param {String} bkObjId 对象的模型id
      * @return {promises} promises 对象
      */
-    deleteMainlineObject ({ commit, state, dispatch, rootGetters }, { bkObjId, config }) {
-        return $http.delete(`delete/topomodelmainline/object/${bkObjId}`, config)
-    },
+  deleteMainlineObject({ commit, state, dispatch, rootGetters }, { bkObjId, config }) {
+    return $http.delete(`delete/topomodelmainline/object/${bkObjId}`, config)
+  },
 
-    /**
+  /**
      * 查询模型拓扑
      * @param {Function} commit store commit mutation hander
      * @param {Object} state store state
      * @param {String} dispatch store dispatch action hander
      * @return {promises} promises 对象
      */
-    searchMainlineObject ({ commit, state, dispatch, rootGetters }, {params, config}) {
-        return $http.post(`find/topomodelmainline`, params, config)
-    },
+  searchMainlineObject({ commit, state, dispatch, rootGetters }, { params, config }) {
+    return $http.post('find/topomodelmainline', params, config)
+  },
 
-    /**
+  /**
      * 获取实例拓扑
      * @param {Function} commit store commit mutation hander
      * @param {Object} state store state
@@ -63,11 +65,11 @@ const actions = {
      * @param {String} bkBizId 业务id
      * @return {promises} promises 对象
      */
-    getInstTopo ({ commit, state, dispatch, rootGetters }, { bizId, config }) {
-        return $http.post(`find/topoinst/biz/${bizId}?level=-1`, config)
-    },
+  getInstTopo({ commit, state, dispatch, rootGetters }, { bizId, config }) {
+    return $http.post(`find/topoinst/biz/${bizId}`, config)
+  },
 
-    /**
+  /**
      * 获取子节点实例
      * @param {Function} commit store commit mutation hander
      * @param {Object} state store state
@@ -78,11 +80,11 @@ const actions = {
      * @param {String} bkInstId 实例id
      * @return {promises} promises 对象
      */
-    searchInstTopo ({ commit, state, dispatch }, { bkSupplierAccount, bkObjId, bkBizId, bkInstId }) {
-        return $http.get(`topoinstchild/object/${bkObjId}/biz/${bkBizId}/inst/${bkInstId}`)
-    },
+  searchInstTopo({ commit, state, dispatch }, { bkSupplierAccount, bkObjId, bkBizId, bkInstId }) {
+    return $http.get(`topoinstchild/object/${bkObjId}/biz/${bkBizId}/inst/${bkInstId}`)
+  },
 
-    /**
+  /**
      * 查询内置模块集
      * @param {Function} commit store commit mutation hander
      * @param {Object} state store state
@@ -91,9 +93,37 @@ const actions = {
      * @param {String} bkBizId 业务id
      * @return {promises} promises 对象
      */
-    getInternalTopo ({ commit, state, dispatch, rootGetters }, { bizId, config }) {
-        return $http.get(`topo/internal/${rootGetters.supplierAccount}/${bizId}`, config)
+  getInternalTopo({ commit, state, dispatch, rootGetters }, { bizId, config }) {
+    return $http.get(`topo/internal/${rootGetters.supplierAccount}/${bizId}`, config)
+  },
+
+  getTopoPath(context, { bizId, params, config }) {
+    return $http.post(`find/topopath/biz/${bizId}`, params, config)
+  },
+  /**
+   * 接口设置查询上限为1000，按照limit进行请求拆分，调用方无感知
+   */
+  async getTopoStatistics(context, { bizId, params }) {
+    const queue = []
+    const limit = 1000
+    const nodes = params.condition
+    let index = 0
+    while (index < nodes.length) {
+      queue.push($http.post(`find/topoinstnode/host_serviceinst_count/${bizId}`, {
+        condition: nodes.slice(index, index + limit)
+      }))
+      index = index + limit
     }
+    try {
+      const results = await Promise.all(queue)
+      return results.reduce((result, current) => {
+        result.push(...current)
+        return result
+      }, [])
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
 }
 
 const mutations = {
@@ -101,9 +131,9 @@ const mutations = {
 }
 
 export default {
-    namespaced: true,
-    state,
-    getters,
-    actions,
-    mutations
+  namespaced: true,
+  state,
+  getters,
+  actions,
+  mutations
 }

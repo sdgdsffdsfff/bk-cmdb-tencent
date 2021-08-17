@@ -17,6 +17,7 @@ import (
 
 	"configcenter/src/common"
 	"configcenter/src/common/backbone/service_mange/zk"
+	"configcenter/src/common/blog"
 	"configcenter/src/common/registerdiscover"
 	"configcenter/src/common/types"
 )
@@ -24,7 +25,6 @@ import (
 type ServiceManageInterface interface {
 	// 判断当前进程是否为master 进程， 服务注册节点的第一个节点
 	IsMaster() bool
-	TMServer() Interface
 }
 
 type DiscoveryInterface interface {
@@ -35,31 +35,43 @@ type DiscoveryInterface interface {
 	ProcServer() Interface
 	TopoServer() Interface
 	DataCollect() Interface
-	AuditCtrl() Interface
-	HostCtrl() Interface
-	ObjectCtrl() Interface
-	ProcCtrl() Interface
-	GseProcServ() Interface
+	GseProcServer() Interface
 	CoreService() Interface
+	OperationServer() Interface
+	TaskServer() Interface
+	CloudServer() Interface
+	AuthServer() Interface
+	Server(name string) Interface
+	CacheService() Interface
 	ServiceManageInterface
 }
 
 type Interface interface {
+	// 获取注册在zk上的所有服务节点
 	GetServers() ([]string, error)
+	// 最新的服务节点信息存放在该channel里，可被用来消费，以监听服务节点的变化
+	GetServersChan() chan []string
 }
 
-func NewDiscoveryInterface(client *zk.ZkClient) (DiscoveryInterface, error) {
+// NewServiceDiscovery new a simple discovery module which can be used to get alive server address
+func NewServiceDiscovery(client *zk.ZkClient) (DiscoveryInterface, error) {
 	disc := registerdiscover.NewRegDiscoverEx(client)
 
 	d := &discover{
 		servers: make(map[string]*server),
 	}
-	for component := range types.AllModule {
-		if component == types.CC_MODULE_WEBSERVER {
+
+	curServiceName := common.GetIdentification()
+	services := types.GetDiscoveryService()
+	// 将当前服务也放到需要发现中
+	services[curServiceName] = struct{}{}
+	for component := range services {
+		// 如果所有服务都按需发现服务。这个地方时不需要配置
+		if component == types.CC_MODULE_WEBSERVER && curServiceName != types.CC_MODULE_WEBSERVER {
 			continue
 		}
 		path := fmt.Sprintf("%s/%s", types.CC_SERV_BASEPATH, component)
-		svr, err := newServerDiscover(disc, path)
+		svr, err := newServerDiscover(disc, path, component)
 		if err != nil {
 			return nil, fmt.Errorf("discover %s failed, err: %v", component, err)
 		}
@@ -102,23 +114,7 @@ func (d *discover) DataCollect() Interface {
 	return d.servers[types.CC_MODULE_DATACOLLECTION]
 }
 
-func (d *discover) AuditCtrl() Interface {
-	return d.servers[types.CC_MODULE_AUDITCONTROLLER]
-}
-
-func (d *discover) HostCtrl() Interface {
-	return d.servers[types.CC_MODULE_HOSTCONTROLLER]
-}
-
-func (d *discover) ObjectCtrl() Interface {
-	return d.servers[types.CC_MODULE_OBJECTCONTROLLER]
-}
-
-func (d *discover) ProcCtrl() Interface {
-	return d.servers[types.CC_MODULE_PROCCONTROLLER]
-}
-
-func (d *discover) GseProcServ() Interface {
+func (d *discover) GseProcServer() Interface {
 	return d.servers[types.GSE_MODULE_PROCSERVER]
 }
 
@@ -126,12 +122,37 @@ func (d *discover) CoreService() Interface {
 	return d.servers[types.CC_MODULE_CORESERVICE]
 }
 
-func (d *discover) TMServer() Interface {
-	return d.servers[types.CC_MODULE_TXC]
+func (d *discover) OperationServer() Interface {
+	return d.servers[types.CC_MODULE_OPERATION]
 }
 
-// IsMster current is master
-func (d *discover) IsMaster() bool {
+func (d *discover) TaskServer() Interface {
+	return d.servers[types.CC_MODULE_TASK]
+}
 
-	return d.servers[common.GetIdentification()].IsMaster(common.GetServerInfo().Address())
+func (d *discover) CloudServer() Interface {
+	return d.servers[types.CC_MODULE_CLOUD]
+}
+
+func (d *discover) AuthServer() Interface {
+	return d.servers[types.CC_MODULE_AUTH]
+}
+
+func (d *discover) CacheService() Interface {
+	return d.servers[types.CC_MODULE_CACHESERVICE]
+}
+
+// IsMaster check whether current is master
+func (d *discover) IsMaster() bool {
+	return d.servers[common.GetIdentification()].IsMaster(common.GetServerInfo().UUID)
+}
+
+// Server 根据服务名获取服务再服务发现组件中的相关信息
+func (d *discover) Server(name string) Interface {
+	if svr, ok := d.servers[name]; ok {
+		return svr
+	}
+	blog.V(5).Infof("not found server. name: %s", name)
+
+	return emptyServerInst
 }

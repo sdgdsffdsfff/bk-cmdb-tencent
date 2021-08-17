@@ -24,8 +24,8 @@ import (
 )
 
 var (
-	//需要转换的时间的标志
-	convTimeFields []string = []string{common.CreateTimeField, common.LastTimeField, common.ConfirmTimeField}
+	// 需要转换的时间的标志
+	convTimeFields = []string{common.CreateTimeField, common.LastTimeField, common.ConfirmTimeField}
 )
 
 func GetCurrentTimeStr() string {
@@ -62,7 +62,8 @@ func convTimeItem(item interface{}) (interface{}, error) {
 						break
 					}
 				}
-				if !timeTypeOk { //如果当前不需要转换，递归转
+				// 如果当前不需要转换，递归转
+				if !timeTypeOk {
 					arrItem[key], _ = convTimeItem(value)
 					continue
 				}
@@ -99,7 +100,7 @@ func convTimeItem(item interface{}) (interface{}, error) {
 			item = arrItem
 		}
 	case []interface{}:
-		//如果是数据，递归转换所有子项
+		// 如果是数据，递归转换所有子项
 		arrItem, ok := item.([]interface{})
 		if true == ok {
 			for index, value := range arrItem {
@@ -185,36 +186,4 @@ func FormatPeriod(period string) (string, error) {
 	}
 
 	return strconv.Itoa(num) + period[len(period)-1:], nil
-}
-
-type Ticker struct {
-	C      chan time.Time
-	ticker *time.Ticker
-	stoped bool
-}
-
-func (t *Ticker) Stop() {
-	t.ticker.Stop()
-	t.stoped = true
-}
-
-func (t *Ticker) Tick() {
-	select {
-	case t.C <- time.Now():
-	default:
-	}
-}
-
-func NewTicker(d time.Duration) *Ticker {
-	t := &Ticker{
-		ticker: time.NewTicker(d),
-		C:      make(chan time.Time, 2),
-	}
-	go func() {
-		for !t.stoped {
-			t.C <- <-t.ticker.C
-		}
-		close(t.C)
-	}()
-	return t
 }

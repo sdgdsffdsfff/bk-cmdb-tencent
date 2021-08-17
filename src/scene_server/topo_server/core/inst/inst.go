@@ -13,17 +13,17 @@
 package inst
 
 import (
-	"context"
 	"encoding/json"
 
 	"configcenter/src/apimachinery"
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
 	"configcenter/src/common/condition"
+	"configcenter/src/common/http/rest"
 	"configcenter/src/common/mapstr"
 	"configcenter/src/common/metadata"
+	"configcenter/src/common/util"
 	"configcenter/src/scene_server/topo_server/core/model"
-	"configcenter/src/scene_server/topo_server/core/types"
 )
 
 // Inst the inst interface
@@ -47,7 +47,7 @@ type Inst interface {
 	SetAssoID(id int64)
 	GetAssoID() int64
 
-	SetValue(key string, value interface{}) error
+	SetValue(key string, value interface{})
 
 	SetValues(values mapstr.MapStr)
 
@@ -56,13 +56,18 @@ type Inst interface {
 	ToMapStr() mapstr.MapStr
 
 	IsDefault() bool
+
+	GetBizID() (int64, error)
+
+	CheckInstanceExists(nonInnerAttributes []model.AttributeInterface) (exist bool, filter condition.Condition, err error)
+	UpdateInstance(filter condition.Condition, data mapstr.MapStr, nonInnerAttributes []model.AttributeInterface) error
 }
 
 var _ Inst = (*inst)(nil)
 
 type inst struct {
 	clientSet apimachinery.ClientSetInterface
-	params    types.ContextParams
+	kit       *rest.Kit
 	datas     mapstr.MapStr
 	target    model.Object
 	// this instance associate with object id, as is InstAsst table "id" filed.
@@ -87,55 +92,61 @@ func (cli *inst) searchInsts(targetModel model.Object, cond condition.Condition)
 	queryInput.Condition = cond.ToMapStr()
 
 	if targetModel.Object().ObjectID != common.BKInnerObjIDHost {
-		rsp, err := cli.clientSet.CoreService().Instance().ReadInstance(context.Background(), cli.params.Header, targetModel.GetObjectID(), &metadata.QueryCondition{Condition: cond.ToMapStr()})
+		rsp, err := cli.clientSet.CoreService().Instance().ReadInstance(cli.kit.Ctx, cli.kit.Header, targetModel.GetObjectID(), &metadata.QueryCondition{Condition: cond.ToMapStr()})
 		if nil != err {
-			blog.Errorf("[inst-inst] failed to request the object controller , error info is %s", err.Error())
-			return nil, cli.params.Err.Error(common.CCErrCommHTTPDoRequestFailed)
+			blog.Errorf("[inst-inst] failed to request the object controller , error info is %s, rid: %s", err.Error(), cli.kit.Rid)
+			return nil, cli.kit.CCError.Error(common.CCErrCommHTTPDoRequestFailed)
 		}
 
 		if !rsp.Result {
-			blog.Errorf("[inst-inst] failed to search the inst, error info is %s", rsp.ErrMsg)
-			return nil, cli.params.Err.New(rsp.Code, rsp.ErrMsg)
+			blog.Errorf("[inst-inst] failed to search the inst, error info is %s, rid: %s", rsp.ErrMsg, cli.kit.Rid)
+			return nil, cli.kit.CCError.New(rsp.Code, rsp.ErrMsg)
 		}
 
-		return CreateInst(cli.params, cli.clientSet, targetModel, rsp.Data.Info), nil
+		return CreateInst(cli.kit, cli.clientSet, targetModel, rsp.Data.Info), nil
 	}
 
 	// search hosts
-	rsp, err := cli.clientSet.HostController().Host().GetHosts(context.Background(), cli.params.Header, queryInput)
+	rsp, err := cli.clientSet.CoreService().Host().GetHosts(cli.kit.Ctx, cli.kit.Header, queryInput)
 	if nil != err {
-		blog.Errorf("[inst-inst] failed to request the object controller , error info is %s", err.Error())
-		return nil, cli.params.Err.Error(common.CCErrCommHTTPDoRequestFailed)
+		blog.Errorf("[inst-inst] failed to request the object controller , error info is %s, rid: %s", err.Error(), cli.kit.Rid)
+		return nil, cli.kit.CCError.Error(common.CCErrCommHTTPDoRequestFailed)
 	}
 
 	if !rsp.Result {
-		blog.Errorf("[inst-inst] failed to search the inst, error info is %s", rsp.ErrMsg)
-		return nil, cli.params.Err.New(rsp.Code, rsp.ErrMsg)
+		blog.Errorf("[inst-inst] failed to search the inst, error info is %s, rid: %s", rsp.ErrMsg, cli.kit.Rid)
+		return nil, cli.kit.CCError.New(rsp.Code, rsp.ErrMsg)
 	}
 
-	return CreateInst(cli.params, cli.clientSet, targetModel, mapstr.NewArrayFromMapStr(rsp.Data.Info)), nil
+	return CreateInst(cli.kit, cli.clientSet, targetModel, mapstr.NewArrayFromMapStr(rsp.Data.Info)), nil
 
 }
 
 func (cli *inst) Create() error {
+	rid := cli.kit.Rid
+	objID := cli.target.GetObjectID()
+
+	// 暂停使用的model不允许创建实例
 	if cli.target.Object().IsPaused {
-		return cli.params.Err.Error(common.CCErrorTopoModleStopped)
+		return cli.kit.CCError.Error(common.CCErrorTopoModelStopped)
 	}
+	// app/set/module等非通用模型没有 bk_obj_id 字段
 	if cli.target.IsCommon() {
-		cli.datas.Set(common.BKObjIDField, cli.target.Object().ObjectID)
+		cli.datas.Set(common.BKObjIDField, objID)
 	}
 
-	cli.datas.Set(common.BKOwnerIDField, cli.params.SupplierAccount)
+	cli.datas.Set(common.BKOwnerIDField, cli.kit.SupplierAccount)
 
-    rsp, err := cli.clientSet.CoreService().Instance().CreateInstance(context.Background(), cli.params.Header, cli.target.GetObjectID(), &metadata.CreateModelInstance{Data: cli.datas})
+	data := &metadata.CreateModelInstance{Data: cli.datas}
+	rsp, err := cli.clientSet.CoreService().Instance().CreateInstance(cli.kit.Ctx, cli.kit.Header, objID, data)
 	if nil != err {
-		blog.Errorf("failed to create object instance, error info is %s", err.Error())
+		blog.Errorf("failed to create object instance, error info is %s, rid: %s", err.Error(), rid)
 		return err
 	}
 
 	if !rsp.Result {
-		blog.Errorf("failed to create object instance ,error info is %v", rsp.ErrMsg)
-		return cli.params.Err.Error(common.CCErrTopoInstCreateFailed)
+		blog.Errorf("failed to create object instance ,error info is %v, rid: %s", rsp.ErrMsg, rid)
+		return cli.kit.CCError.New(rsp.Code, rsp.ErrMsg)
 	}
 
 	cli.datas.Set(cli.target.GetInstIDFieldName(), rsp.Data.Created.ID)
@@ -144,66 +155,51 @@ func (cli *inst) Create() error {
 }
 
 func (cli *inst) Update(data mapstr.MapStr) error {
-	if cli.target.Object().IsPaused {
-		return cli.params.Err.Error(common.CCErrorTopoModleStopped)
+	exist, filter, err := cli.CheckInstanceExists(nil)
+	if err != nil {
+		return err
 	}
-	instIDName := cli.target.GetInstIDFieldName()
-	instID, exists := cli.datas.Get(instIDName)
+	if exist == true {
+		return cli.UpdateInstance(filter, data, nil)
+	}
+	return cli.kit.CCError.CCError(common.CCErrCommNotFound)
+}
 
+func (cli *inst) UpdateInstance(filter condition.Condition, data mapstr.MapStr, nonInnerAttributes []model.AttributeInterface) error {
+	// not allowed to update these fields, need to use specialized function
+	data.Remove(common.BKParentIDField)
+	data.Remove(common.BKAppIDField)
+	rid := cli.kit.Rid
 	tObj := cli.target.Object()
-	cond := condition.CreateCondition()
-	if cli.target.IsCommon() {
-		cond.Field(common.BKObjIDField).Eq(tObj.ObjectID)
-	}
-
-	if exists {
-		// construct the update condition by the instid
-		cond.Field(instIDName).Eq(instID)
-	} else {
-		// construct the update condition by the only key
-
-		attrs, err := cli.target.GetAttributesExceptInnerFields()
-		if nil != err {
-			blog.Errorf("failed to get attributes for the object(%s), error info is is %s", tObj.ObjectID, err.Error())
-			return err
-		}
-
-		for _, attrItem := range attrs {
-			// check the inst
-			att := attrItem.Attribute()
-			if att.IsOnly || att.PropertyID == cli.target.GetInstNameFieldName() {
-				val, exists := cli.datas.Get(att.PropertyID)
-				if !exists {
-					return cli.params.Err.Errorf(common.CCErrCommParamsLostField, att.PropertyID)
-				}
-				cond.Field(att.PropertyID).Eq(val)
-			}
-		}
-
+	objID := tObj.ObjectID
+	if tObj.IsPaused {
+		return cli.kit.CCError.Error(common.CCErrorTopoModelStopped)
 	}
 
 	// execute update action
-	updateCond := metadata.UpdateOption{}
-	updateCond.Data = data
-	updateCond.Condition = cond.ToMapStr()
-	rsp, err := cli.clientSet.CoreService().Instance().UpdateInstance(context.Background(), cli.params.Header, cli.target.GetObjectID(), &updateCond)
+	updateOption := metadata.UpdateOption{
+		Condition: filter.ToMapStr(),
+		Data:      data,
+	}
+	rsp, err := cli.clientSet.CoreService().Instance().UpdateInstance(cli.kit.Ctx, cli.kit.Header, objID, &updateOption)
 	if nil != err {
-		blog.Errorf("failed to update the object(%s) instances, error info is %s", tObj.ObjectID, err.Error())
-		return cli.params.Err.Error(common.CCErrCommHTTPDoRequestFailed)
+		blog.Errorf("failed to update object(%s)'s instances, err: %s, rid: %s", objID, err.Error(), rid)
+		return cli.kit.CCError.Error(common.CCErrCommHTTPDoRequestFailed)
 	}
 
 	if !rsp.Result {
-		blog.Errorf("failed to update the object(%s) instances, error info is %s", tObj.ObjectID, rsp.ErrMsg)
-		return cli.params.Err.Error(common.CCErrTopoInstUpdateFailed)
+		blog.Errorf("failed to update object(%s)'s instances, err: %s, rid: %s", objID, rsp.ErrMsg, rid)
+		return cli.kit.CCError.New(rsp.Code, rsp.ErrMsg)
 	}
 
-	// read the new data
-	instItems, err := cli.searchInsts(cli.target, cond)
+	// read the updated data
+	instItems, err := cli.searchInsts(cli.target, filter)
 	if nil != err {
-		blog.Errorf("[inst-inst] failed to search the new insts data, error info is %s", err.Error())
+		blog.ErrorJSON("[inst-inst] failed to search updated data, cond: %s, err: %s, rid: %s", filter.ToMapStr(), err.Error(), rid)
 		return err
 	}
 
+	// TODO: 这种实现方案非常不安全
 	for _, item := range instItems { // should be only one item
 		cli.datas = item.GetValues()
 	}
@@ -212,62 +208,69 @@ func (cli *inst) Update(data mapstr.MapStr) error {
 }
 
 func (cli *inst) IsExists() (bool, error) {
+	exist, _, err := cli.CheckInstanceExists(nil)
+	return exist, err
+}
 
-	tObj := cli.target.Object()
-	attrs, err := cli.target.GetAttributesExceptInnerFields()
-	if nil != err {
-		blog.Errorf("failed to get attributes for the object(%s), error info is is %s", tObj.ObjectID, err.Error())
-		return false, err
+func (cli *inst) CheckInstanceExists(nonInnerAttributes []model.AttributeInterface) (exist bool, filter condition.Condition, err error) {
+	rid := cli.kit.Rid
+	objID := cli.target.GetObjectID()
+	instIDField := cli.target.GetInstIDFieldName()
+	instNameField := cli.target.GetInstNameFieldName()
+	if nonInnerAttributes == nil {
+		var err error
+		nonInnerAttributes, err = cli.target.GetNonInnerAttributes()
+		if nil != err {
+			blog.Errorf("failed to get attributes for the object(%s), err: %s, rid: %s", objID, err.Error(), rid)
+			return false, nil, err
+		}
 	}
 
 	cond := condition.CreateCondition()
 	// if the inst id already exist, query it with id directly,
 	// otherwise, when import a object instance, the other field may be changed.
-	if id, exist := cli.datas[cli.target.GetInstIDFieldName()]; exist {
-		cond.Field(cli.target.GetInstIDFieldName()).Eq(id)
+	if id, exist := cli.datas[instIDField]; exist {
+		cond.Field(instIDField).Eq(id)
 	} else {
 		if cli.target.IsCommon() {
-			cond.Field(common.BKObjIDField).Eq(tObj.ObjectID)
+			cond.Field(common.BKObjIDField).Eq(objID)
 		}
 		val, exists := cli.datas.Get(common.BKInstParentStr)
 		if exists {
 			cond.Field(common.BKInstParentStr).Eq(val)
 		}
 
-		for _, attrItem := range attrs {
-
+		for _, attrItem := range nonInnerAttributes {
 			// check the inst
 			attr := attrItem.Attribute()
-			if attr.IsOnly || attr.PropertyID == cli.target.GetInstNameFieldName() {
+			if attr.IsOnly || attr.PropertyID == instNameField {
 
 				val, exists := cli.datas.Get(attr.PropertyID)
 				if !exists {
-					return false, cli.params.Err.Errorf(common.CCErrCommParamsLostField, attr.PropertyID)
+					return false, nil, cli.kit.CCError.Errorf(common.CCErrCommParamsLostField, attr.PropertyID)
 				}
 				cond.Field(attr.PropertyID).Eq(val)
 			}
-
 		}
 	}
 
-	queryCond := metadata.QueryInput{}
-	queryCond.Condition = cond.ToMapStr()
-
-	rsp, err := cli.clientSet.CoreService().Instance().ReadInstance(
-		context.Background(), cli.params.Header, cli.target.GetObjectID(), &metadata.QueryCondition{Condition: cond.ToMapStr()},
-	)
+	queryCond := &metadata.QueryCondition{
+		Condition: cond.ToMapStr(),
+	}
+	rsp, err := cli.clientSet.CoreService().Instance().ReadInstance(cli.kit.Ctx, cli.kit.Header, objID, queryCond)
 	if nil != err {
-		blog.Errorf("failed to search object(%s) instances  , error info is %s", tObj.ObjectID, err.Error())
-		return false, cli.params.Err.Error(common.CCErrCommHTTPDoRequestFailed)
+		blog.Errorf("failed to search object(%s) instances, err: %s, rid: %s", objID, err.Error(), rid)
+		return false, nil, cli.kit.CCError.Error(common.CCErrCommHTTPDoRequestFailed)
 	}
 
 	if !rsp.Result {
-		blog.Errorf("failed to search the object (%s) instances, error info is %s", tObj.ObjectID, rsp.ErrMsg)
-		return false, cli.params.Err.Error(common.CCErrTopoInstSelectFailed)
+		blog.Errorf("failed to search the object(%s) instances, err: %s, rid: %s", objID, rsp.ErrMsg, rid)
+		return false, nil, cli.kit.CCError.New(rsp.Code, rsp.ErrMsg)
 	}
 
-	return 0 != rsp.Data.Count, nil
+	return 0 != rsp.Data.Count, cond, nil
 }
+
 func (cli *inst) Save(data mapstr.MapStr) error {
 
 	if nil != data {
@@ -305,9 +308,8 @@ func (cli *inst) ToMapStr() mapstr.MapStr {
 	return cli.datas
 }
 
-func (cli *inst) SetValue(key string, value interface{}) error {
+func (cli *inst) SetValue(key string, value interface{}) {
 	cli.datas.Set(key, value)
-	return nil
 }
 
 func (cli *inst) SetValues(values mapstr.MapStr) {
@@ -322,7 +324,8 @@ func (cli *inst) IsDefault() bool {
 	if cli.datas.Exists(common.BKDefaultField) {
 		defaultVal, err := cli.datas.Int64(common.BKDefaultField)
 		if nil != err {
-			blog.Errorf("[operation-inst]the default value(%#v) is invalid, error info is %s", cli.datas[common.BKDefaultField], err.Error())
+			defaultFieldValue := cli.datas[common.BKDefaultField]
+			blog.Errorf("[operation-inst]the `default` field's value(%#v) invalid, err: %s, rid: %s", defaultFieldValue, err.Error(), cli.kit.Rid)
 			return false
 		}
 
@@ -332,4 +335,8 @@ func (cli *inst) IsDefault() bool {
 	}
 
 	return false
+}
+
+func (cli *inst) GetBizID() (int64, error) {
+	return util.GetInt64ByInterface(cli.datas[common.BKAppIDField])
 }

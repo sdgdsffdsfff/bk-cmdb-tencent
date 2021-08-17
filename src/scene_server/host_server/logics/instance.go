@@ -13,7 +13,6 @@
 package logics
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -21,8 +20,10 @@ import (
 	"configcenter/src/common"
 	"configcenter/src/common/blog"
 	"configcenter/src/common/errors"
+	"configcenter/src/common/http/rest"
 	"configcenter/src/common/mapstr"
 	meta "configcenter/src/common/metadata"
+	parse "configcenter/src/common/paraparse"
 	"configcenter/src/common/util"
 )
 
@@ -36,16 +37,16 @@ type InstNameAsst struct {
 	InstInfo   map[string]interface{} `json:"inst_info,omitempty"`
 }
 
-func (lgc *Logics) getInstAsst(ctx context.Context, owerID, objID string, IDs []string, query *meta.QueryInput) ([]InstNameAsst, int, errors.CCError) {
-	return lgc.getRawInstAsst(ctx, owerID, objID, IDs, query, false)
+func (lgc *Logics) getInstAsst(kit *rest.Kit, objID string, IDs []string, query *meta.QueryInput) ([]InstNameAsst, int, errors.CCError) {
+	return lgc.getRawInstAsst(kit, objID, IDs, query, false)
 
 }
 
-func (lgc *Logics) getInstAsstDetail(ctx context.Context, owerID, objID string, IDs []string, query *meta.QueryInput) ([]InstNameAsst, int, errors.CCError) {
-	return lgc.getRawInstAsst(ctx, owerID, objID, IDs, query, true)
+func (lgc *Logics) getInstAsstDetail(kit *rest.Kit, objID string, IDs []string, query *meta.QueryInput) ([]InstNameAsst, int, errors.CCError) {
+	return lgc.getRawInstAsst(kit, objID, IDs, query, true)
 }
 
-func (lgc *Logics) getRawInstAsst(ctx context.Context, ownerID, objID string, IDs []string, query *meta.QueryInput, isDetail bool) ([]InstNameAsst, int, errors.CCError) {
+func (lgc *Logics) getRawInstAsst(kit *rest.Kit, objID string, IDs []string, query *meta.QueryInput, isDetail bool) ([]InstNameAsst, int, errors.CCError) {
 	var instName, instID string
 	tmpIDs := []int{}
 	for _, ID := range IDs {
@@ -54,8 +55,8 @@ func (lgc *Logics) getRawInstAsst(ctx context.Context, ownerID, objID string, ID
 		}
 		tmpID, err := strconv.Atoi(ID)
 		if nil != err {
-			blog.Errorf("getRawInstAsst get objID(%s) inst id not integer, inst id:(%+v), rid:%s", objID, IDs, lgc.rid)
-			return nil, 0, lgc.ccErr.Errorf(common.CCErrCommInstFieldConvFail, objID, "association id", "int", err.Error())
+			blog.Errorf("getRawInstAsst get objID(%s) inst id not integer, inst id:(%+v), rid:%s", objID, IDs, kit.Rid)
+			return nil, 0, kit.CCError.Errorf(common.CCErrCommInstFieldConvertFail, objID, "association id", "int", err.Error())
 		}
 		tmpIDs = append(tmpIDs, tmpID)
 	}
@@ -66,15 +67,14 @@ func (lgc *Logics) getRawInstAsst(ctx context.Context, ownerID, objID string, ID
 	if nil != query.Condition {
 		newCondtion, err := mapstr.NewFromInterface(query.Condition)
 		if err != nil {
-			blog.Errorf("getRawInstAsst get objID(%s) inst id not integer, inst id:(%+v), rid:%s", objID, IDs, lgc.rid)
-			return nil, 0, lgc.ccErr.Errorf(common.CCErrCommInstFieldConvFail, objID, "query condition", "map[string]interface{}", err.Error())
+			blog.Errorf("getRawInstAsst get objID(%s) inst id not integer, inst id:(%+v), rid:%s", objID, IDs, kit.Rid)
+			return nil, 0, kit.CCError.Errorf(common.CCErrCommInstFieldConvertFail, objID, "query condition", "map[string]interface{}", err.Error())
 		}
 		condition = newCondtion
 	}
 	input := &meta.QueryCondition{
-		Fields:  strings.Split(query.Fields, ","),
-		SortArr: meta.NewSearchSortParse().String(query.Sort).ToSearchSortArr(),
-		Limit:   meta.SearchLimit{Offset: int64(query.Start), Limit: int64(query.Limit)},
+		Fields: strings.Split(query.Fields, ","),
+		Page:   meta.BasePage{Start: query.Start, Limit: query.Limit, Sort: query.Sort},
 	}
 	rawObjID := objID
 	switch objID {
@@ -122,14 +122,14 @@ func (lgc *Logics) getRawInstAsst(ctx context.Context, ownerID, objID string, ID
 		rawObjID = objID
 	}
 	input.Condition = condition
-	rtn, err := lgc.CoreAPI.CoreService().Instance().ReadInstance(ctx, lgc.header, rawObjID, input)
+	rtn, err := lgc.CoreAPI.CoreService().Instance().ReadInstance(kit.Ctx, kit.Header, rawObjID, input)
 	if err != nil {
-		blog.Errorf("getRawInstAsst SearchObjects http do error, err:%s,objID:%s,input:%+v,rid:%s", err.Error(), objID, input, lgc.rid)
-		return nil, 0, lgc.ccErr.Error(common.CCErrCommHTTPDoRequestFailed)
+		blog.Errorf("getRawInstAsst SearchObjects http do error, err:%s,objID:%s,input:%+v,rid:%s", err.Error(), objID, input, kit.Rid)
+		return nil, 0, kit.CCError.Error(common.CCErrCommHTTPDoRequestFailed)
 	}
 	if !rtn.Result {
-		blog.Errorf("getRawInstAsst SearchObjects http reponse error, err code:%d, err msg:%s,objID:%s,input:%+v,rid:%s", rtn.Code, rtn.ErrMsg, objID, input, lgc.rid)
-		return nil, 0, lgc.ccErr.New(rtn.Code, rtn.ErrMsg)
+		blog.Errorf("getRawInstAsst SearchObjects http reponse error, err code:%d, err msg:%s,objID:%s,input:%+v,rid:%s", rtn.Code, rtn.ErrMsg, objID, input, kit.Rid)
+		return nil, 0, kit.CCError.New(rtn.Code, rtn.ErrMsg)
 	}
 
 	delarry := func(s []string, i int) []string {
@@ -153,7 +153,7 @@ func (lgc *Logics) getRawInstAsst(ctx context.Context, ownerID, objID string, ID
 
 				itemInstID, err := util.GetInt64ByInterface(dataVal)
 				if nil != err {
-					blog.Errorf("not found assocte object ID %s from %v", instID, info)
+					blog.Errorf("not found assocte object ID %s from %v, rid: %s", instID, info, kit.Rid)
 					return nil, 0, fmt.Errorf("not found assocte object ID %s from %v", instID, info)
 				}
 				if 0 != len(IDs) {
@@ -183,4 +183,106 @@ func (lgc *Logics) getRawInstAsst(ctx context.Context, ownerID, objID string, ID
 	}
 
 	return allInst, rtn.Data.Count, nil
+}
+
+// SearchInstance search model instance by condition
+func (lgc *Logics) SearchInstance(kit *rest.Kit, objID string, input *meta.QueryCondition) ([]mapstr.MapStr,
+	errors.CCErrorCoder) {
+
+	instanceRes, err := lgc.CoreAPI.CoreService().Instance().ReadInstance(kit.Ctx, kit.Header, objID, input)
+	if err != nil {
+		blog.ErrorJSON("search %s instance failed, err: %s, input: %s, rid: %s", objID, err, input, kit.Rid)
+		return nil, kit.CCError.CCError(common.CCErrCommHTTPDoRequestFailed)
+	}
+
+	if err := instanceRes.CCError(); err != nil {
+		blog.ErrorJSON("search %s instance failed, err: %s, query: %s, rid: %s", objID, err, input, kit.Rid)
+		return nil, err
+	}
+
+	return instanceRes.Data.Info, nil
+}
+
+// GetInstIDNameInfo get instance ids and id to name map by condition
+func (lgc *Logics) GetInstIDNameInfo(kit *rest.Kit, objID string, cond mapstr.MapStr) (map[int64]string, []int64,
+	error) {
+	idField := meta.GetInstIDFieldByObjID(objID)
+	nameField := meta.GetInstNameFieldName(objID)
+
+	query := &meta.QueryCondition{
+		Fields:    []string{idField, nameField},
+		Condition: cond,
+		Page: meta.BasePage{
+			Limit: common.BKNoLimit,
+		},
+	}
+
+	instances, err := lgc.SearchInstance(kit, objID, query)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	instanceMap := make(map[int64]string)
+	instanceIDs := make([]int64, 0)
+	for _, instance := range instances {
+		instanceID, err := instance.Int64(idField)
+		if err != nil {
+			blog.ErrorJSON("instance %s id is invalid, error: %s, rid: %s", instance, err, kit.Rid)
+			return nil, nil, kit.CCError.CCErrorf(common.CCErrCommParamsInvalid, idField)
+		}
+		instanceIDs = append(instanceIDs, instanceID)
+
+		instanceName, err := instance.String(nameField)
+		if err != nil {
+			blog.ErrorJSON("instance %s name is invalid, error: %s, rid: %s", instance, err, kit.Rid)
+			return nil, nil, kit.CCError.CCErrorf(common.CCErrCommParamsInvalid, nameField)
+		}
+		instanceMap[instanceID] = instanceName
+	}
+
+	return instanceMap, instanceIDs, nil
+}
+
+// GetInstIDs get instance ids by condition items
+func (lgc *Logics) GetInstIDs(kit *rest.Kit, objID string, cond []meta.ConditionItem) ([]int64, errors.CCErrorCoder) {
+	if len(cond) == 0 {
+		return make([]int64, 0), nil
+	}
+
+	condition := make(map[string]interface{})
+	if err := parse.ParseCommonParams(cond, condition); err != nil {
+		blog.ErrorJSON("parse condition item failed, err: %s, cond: %s, rid: %s", err, cond, kit.Rid)
+		return nil, kit.CCError.CCErrorf(common.CCErrCommParamsInvalid, objID+"_cond")
+	}
+
+	idField := meta.GetInstIDFieldByObjID(objID)
+
+	query := &meta.QueryCondition{
+		Fields:    []string{idField},
+		Condition: condition,
+		Page: meta.BasePage{
+			Limit: common.BKNoLimit,
+		},
+	}
+
+	instances, err := lgc.SearchInstance(kit, objID, query)
+	if err != nil {
+		return nil, err
+	}
+
+	instanceIDs := make([]int64, 0)
+	for _, instance := range instances {
+		instanceID, err := instance.Int64(idField)
+		if err != nil {
+			blog.ErrorJSON("instance %s id is invalid, error: %s, rid: %s", instance, err, kit.Rid)
+			return nil, kit.CCError.CCErrorf(common.CCErrCommParamsInvalid, idField)
+		}
+
+		if instanceID == 0 {
+			continue
+		}
+
+		instanceIDs = append(instanceIDs, instanceID)
+	}
+	return instanceIDs, nil
 }
